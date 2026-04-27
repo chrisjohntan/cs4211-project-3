@@ -1,0 +1,77 @@
+﻿//@@SpinLock_ManualModel@@
+
+// Keep N small (2 or 3) to control state space.
+#define N 2;
+
+// Shared lock bit (like AtomicBool). 0 = unlocked, 1 = locked
+var lock : {0..1} = 0;
+
+// Track number of threads currently inside critical section (for mutual exclusion checks)
+var csCount : {0..N} = 0;
+
+// Optional: who owns the lock (NONE means no owner)
+var owner : {0..N} = N;
+
+// -------------------- Thread behavior --------------------
+
+// A thread repeatedly does non-critical work, then chooses to call try_lock or lock().
+Thread(i) =
+    noncrit.i ->
+    (
+      TryLockOp(i)
+      []
+      LockOp(i)
+    );
+
+// try_lock(): immediate success or immediate failure (no spinning)
+TryLockOp(i) =
+    trylock.i ->
+      (
+        [lock == 0] acquire_try.i { lock = 1; owner = i; } -> CS(i)
+        []
+        [lock == 1] tryfail.i -> Thread(i)
+      );
+
+// lock(): busy-wait until acquire succeeds
+LockOp(i) =
+    lockcall.i ->
+    AcquireLoop(i);
+
+AcquireLoop(i) =
+    (
+      [lock == 0] acquire_lock.i { lock = 1; owner = i; } -> CS(i)
+      []
+      [lock == 1] spin.i -> AcquireLoop(i)
+    );
+
+// Critical section + release (guard drop)
+CS(i) =
+    enter.i { csCount = csCount + 1; } ->
+    critical.i ->
+    exit.i { csCount = csCount - 1; lock = 0; owner = N; } ->
+    Thread(i);
+
+// Run N threads interleavingly
+System() = Thread(0) ||| Thread(1);
+
+// -------------------- Requirements as properties --------------------
+
+// Safety: mutual exclusion
+#define MUTEX (csCount <= 1);
+
+// Safety: lock consistency (if unlocked => no owner; if locked => owner is a real thread)
+#define CONSISTENT (
+  (lock == 0 && owner == N)
+  ||
+  (lock == 1 && owner >= 0 && owner < N)
+);
+
+// Assertions
+#assert System() deadlockfree;
+#assert System() |= [] (MUTEX && CONSISTENT);
+
+// Liveness (often fails without fairness assumptions; see notes below)
+#assert System() |= [] (trylock.0 -> <> (acquire_try.0 || tryfail.0));
+#assert System() |= [] (trylock.1 -> <> (acquire_try.1 || tryfail.1));
+#assert System() |= [] (lockcall.0 -> <> enter.0);
+#assert System() |= [] (lockcall.1 -> <> enter.1);

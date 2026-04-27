@@ -1,0 +1,306 @@
+﻿// ================================================================
+// PAT CSP# Model — Translated from Event-B system "m3" (2_CAR)
+// ================================================================
+
+// ================================================================
+// Rule 1: Numeric constant from context "cd"
+// Axiom: d > 0, selecting d = 5 as a valid value satisfying d > 0
+// ================================================================
+#define d 5;
+
+// ================================================================
+// Rule 2: Constant enumeration from context "COLOR"
+// Axiom: partition(Color, {green}, {red})
+// ================================================================
+enum {green, red};
+
+// ================================================================
+// Rule 2: Constant enumeration from context "SENSOR"
+// Axiom: partition(Sensor, {on}, {off})
+// ================================================================
+enum {on, off};
+
+// ================================================================
+// Rule 3A: Standard initialisation — variable declarations
+// Initial values extracted from INITIALISATION event THEN block
+// ================================================================
+
+// Rule 3A: a ≔ 0
+var a = 0;
+
+// Rule 3A: b ≔ 0
+var b = 0;
+
+// Rule 3A: c ≔ 0
+var c = 0;
+
+// Rule 3A: ml_tl ≔ red (enum value)
+var ml_tl = red;
+
+// Rule 3A: il_tl ≔ red (enum value)
+var il_tl = red;
+
+// Rule 3A: ml_pass ≔ 1
+var ml_pass = 1;
+
+// Rule 3A: il_pass ≔ 1
+var il_pass = 1;
+
+// Rule 3A: ml_out_10 ≔ FALSE → false
+var ml_out_10 = false;
+
+// Rule 3A: il_out_10 ≔ FALSE → false
+var il_out_10 = false;
+
+// Rule 3A: ml_in_10 ≔ FALSE → false
+var ml_in_10 = false;
+
+// Rule 3A: il_in_10 ≔ FALSE → false
+var il_in_10 = false;
+
+// Rule 3A: A ≔ 0
+var A = 0;
+
+// Rule 3A: B ≔ 0
+var B = 0;
+
+// Rule 3A: C ≔ 0
+var C = 0;
+
+// Rule 3A: ML_IN_SR ≔ off (enum value)
+var ML_IN_SR = off;
+
+// Rule 3A: ML_OUT_SR ≔ off (enum value)
+var ML_OUT_SR = off;
+
+// Rule 3A: IL_OUT_SR ≔ off (enum value)
+var IL_OUT_SR = off;
+
+// Rule 3A: IL_IN_SR ≔ off (enum value)
+var IL_IN_SR = off;
+
+// ================================================================
+// Rule 4, 5, 6, 7: Events translated and assembled into System()
+// Rule 4: Each non-INITIALISATION event maps to one PAT event
+// Rule 5: WHERE predicates conjoined with && in square brackets
+// Rule 6: THEN assignments become statements in event block
+// Rule 9: Operator conversion applied throughout
+// Rule 7: All events joined by external choice [] in System()
+// ================================================================
+
+System() =
+
+    // Rule 4: Event ML_out1
+    // Rule 5: Guards — grd1: ml_out_10 = TRUE, grd2: a+b+1 < d
+    // Rule 9: = TRUE → == true, = (comparison) → ==
+    // Rule 6: Actions — a ≔ a+1, ml_pass ≔ 1, ml_out_10 ≔ FALSE
+    // Rule 9: ≔ → =, FALSE → false
+    [ml_out_10 == true && a + b + 1 < d] ML_out1 { a = a + 1; ml_pass = 1; ml_out_10 = false; } -> System()
+    []
+    // Rule 4: Event ML_out2
+    // Rule 5: Guards — grd1: ml_out_10 = TRUE, grd2: a+b+1 = d
+    // Rule 9: = TRUE → == true, = (comparison) → ==
+    // Rule 6: Actions — a ≔ a+1, ml_tl ≔ red, ml_pass ≔ 1, ml_out_10 ≔ FALSE
+    [ml_out_10 == true && a + b + 1 == d] ML_out2 { a = a + 1; ml_tl = red; ml_pass = 1; ml_out_10 = false; } -> System()
+    []
+    // Rule 4: Event IL_out1
+    // Rule 5: Guards — grd1: il_out_10 = TRUE, grd2: b > 1
+    // Rule 9: = TRUE → == true
+    // Rule 6: Actions — b ≔ b−1, c ≔ c+1, il_pass ≔ 1, il_out_10 ≔ FALSE
+    // Rule 9: − (U+2212) → - (standard minus)
+    [il_out_10 == true && b > 1] IL_out1 { b = b - 1; c = c + 1; il_pass = 1; il_out_10 = false; } -> System()
+    []
+    // Rule 4: Event IL_out2
+    // Rule 5: Guards — grd1: il_out_10 = TRUE, grd2: b = 1
+    // Rule 6: Actions — b ≔ b−1, il_tl ≔ red, c ≔ c+1, il_pass ≔ 1, il_out_10 ≔ FALSE
+    [il_out_10 == true && b == 1] IL_out2 { b = b - 1; il_tl = red; c = c + 1; il_pass = 1; il_out_10 = false; } -> System()
+    []
+    // Rule 4: Event ML_tl_green
+    // Rule 5: Guards — grd1: ml_tl = red, grd2: a+b < d, grd3: c = 0,
+    //                  grd4: il_pass = 1, grd5: il_out_10 = FALSE
+    // Rule 9: = (comparison) → ==, = FALSE → == false
+    [ml_tl == red && a + b < d && c == 0 && il_pass == 1 && il_out_10 == false] ML_tl_green { ml_tl = green; il_tl = red; ml_pass = 0; } -> System()
+    []
+    // Rule 4: Event IL_tl_green
+    // Rule 5: Guards — grd1: il_tl = red, grd2: 0 < b, grd3: a = 0,
+    //                  grd4: ml_pass = 1, grd5: ml_out_10 = FALSE
+    [il_tl == red && 0 < b && a == 0 && ml_pass == 1 && ml_out_10 == false] IL_tl_green { il_tl = green; ml_tl = red; il_pass = 0; } -> System()
+    []
+    // Rule 4: Event ML_in
+    // Rule 5: Guards — grd1: ml_in_10 = TRUE, grd2: c > 0
+    // Rule 6: Actions — c ≔ c−1, ml_in_10 ≔ FALSE
+    [ml_in_10 == true && c > 0] ML_in { c = c - 1; ml_in_10 = false; } -> System()
+    []
+    // Rule 4: Event IL_in
+    // Rule 5: Guards — grd1: il_in_10 = TRUE, grd2: 0 < a
+    // Rule 6: Actions — a ≔ a−1, b ≔ b+1, il_in_10 ≔ FALSE
+    [il_in_10 == true && 0 < a] IL_in { a = a - 1; b = b + 1; il_in_10 = false; } -> System()
+    []
+    // Rule 4: Event ML_OUT_ARR
+    // Rule 5: Guards — grd1: ML_OUT_SR = off, grd2: ml_out_10 = FALSE
+    [ML_OUT_SR == off && ml_out_10 == false] ML_OUT_ARR { ML_OUT_SR = on; } -> System()
+    []
+    // Rule 4: Event ML_IN_ARR
+    // Rule 5: Guards — grd1: ML_IN_SR = off, grd2: ml_in_10 = FALSE, grd3: C > 0
+    [ML_IN_SR == off && ml_in_10 == false && C > 0] ML_IN_ARR { ML_IN_SR = on; } -> System()
+    []
+    // Rule 4: Event IL_IN_ARR
+    // Rule 5: Guards — grd1: IL_IN_SR = off, grd2: il_in_10 = FALSE, grd3: A > 0
+    [IL_IN_SR == off && il_in_10 == false && A > 0] IL_IN_ARR { IL_IN_SR = on; } -> System()
+    []
+    // Rule 4: Event IL_OUT_ARR
+    // Rule 5: Guards — grd1: IL_OUT_SR = off, grd2: il_out_10 = FALSE, grd3: B > 0
+    [IL_OUT_SR == off && il_out_10 == false && B > 0] IL_OUT_ARR { IL_OUT_SR = on; } -> System()
+    []
+    // Rule 4: Event ML_OUT_DEP
+    // Rule 5: Guards — grd1: ML_OUT_SR = on, grd2: ml_tl = green
+    // Rule 6: Actions — ML_OUT_SR ≔ off, ml_out_10 ≔ TRUE, A ≔ A+1
+    [ML_OUT_SR == on && ml_tl == green] ML_OUT_DEP { ML_OUT_SR = off; ml_out_10 = true; A = A + 1; } -> System()
+    []
+    // Rule 4: Event ML_IN_DEP
+    // Rule 5: Guard — grd1: ML_IN_SR = on (single guard)
+    // Rule 6: Actions — ML_IN_SR ≔ off, ml_in_10 ≔ TRUE, C ≔ C−1
+    [ML_IN_SR == on] ML_IN_DEP { ML_IN_SR = off; ml_in_10 = true; C = C - 1; } -> System()
+    []
+    // Rule 4: Event IL_IN_DEP
+    // Rule 5: Guard — grd1: IL_IN_SR = on (single guard)
+    // Rule 6: Actions — IL_IN_SR ≔ off, il_in_10 ≔ TRUE, A ≔ A−1, B ≔ B+1
+    [IL_IN_SR == on] IL_IN_DEP { IL_IN_SR = off; il_in_10 = true; A = A - 1; B = B + 1; } -> System()
+    []
+    // Rule 4: Event IL_OUT_DEP
+    // Rule 5: Guards — grd1: IL_OUT_SR = on, grd2: il_tl = green
+    // Rule 6: Actions — IL_OUT_SR ≔ off, il_out_10 ≔ TRUE, B ≔ B−1, C ≔ C+1
+    [IL_OUT_SR == on && il_tl == green] IL_OUT_DEP { IL_OUT_SR = off; il_out_10 = true; B = B - 1; C = C + 1; } -> System();
+
+
+
+
+
+// Manual Verification (not generated)
+
+// The number of cars on the bridge and the island is limited by some constant d
+#define req1 A + B + C <= d;
+#assert System |= [] req1;
+
+// The bridge is one way or the other, not both at the same time
+#define req2 A == 0 || C == 0;
+#assert System |= [] req2;
+
+// Cars are not supposed to pass on a red traffic light, only on a green one
+#define req3 !(ml_out_10 == true) || (ml_tl == green);
+#define req4 !(il_out_10 == true) || (il_tl == green);
+#assert System() |= [] req3;
+#assert System() |= [] req4;
+
+// Once started, the system should work forever and never reach a state in which no event can occur.
+#assert System deadlockfree;
+
+
+// INVARIANTS AS ADDITIONAL ASSERTIONS
+// inv1: IL_IN_SR = on => A > 0
+#define inv1 !(IL_IN_SR == on) || (A > 0);
+
+// inv2: IL_OUT_SR = on => B > 0
+#define inv2 !(IL_OUT_SR == on) || (B > 0);
+
+// inv3: ML_IN_SR = on => C > 0
+#define inv3 !(ML_IN_SR == on) || (C > 0);
+
+// inv4: ml_out_10 = true => ml_tl = green
+#define inv4 !(ml_out_10 == true) || (ml_tl == green);
+
+// inv5: il_out_10 = true => il_tl = green
+#define inv5 !(il_out_10 == true) || (il_tl == green);
+
+// inv6: IL_IN_SR = on => il_in_10 = false
+#define inv6 !(IL_IN_SR == on) || (il_in_10 == false);
+
+// inv7: IL_OUT_SR = on => il_out_10 = false
+#define inv7 !(IL_OUT_SR == on) || (il_out_10 == false);
+
+// inv8: ML_IN_SR = on => ml_in_10 = false
+#define inv8 !(ML_IN_SR == on) || (ml_in_10 == false);
+
+// inv9: ML_OUT_SR = on => ml_out_10 = false
+#define inv9 !(ML_OUT_SR == on) || (ml_out_10 == false);
+
+
+// inv10: il_in_10 = TRUE  /\ ml_out_10 = TRUE  => A = a
+#define inv10 !(il_in_10 == true && ml_out_10 == true) || (A == a);
+
+// inv11: il_in_10 = FALSE /\ ml_out_10 = TRUE  => A = a+1
+#define inv11 !(il_in_10 == false && ml_out_10 == true) || (A == a + 1);
+
+// inv12: il_in_10 = TRUE  /\ ml_out_10 = FALSE => A = a-1
+#define inv12 !(il_in_10 == true && ml_out_10 == false) || (A == a - 1);
+
+// inv13: il_in_10 = FALSE /\ ml_out_10 = FALSE => A = a
+#define inv13 !(il_in_10 == false && ml_out_10 == false) || (A == a);
+
+// inv14: il_in_10 = TRUE  /\ il_out_10 = TRUE  => B = b
+#define inv14 !(il_in_10 == true && il_out_10 == true) || (B == b);
+
+// inv15: il_in_10 = TRUE  /\ il_out_10 = FALSE => B = b+1
+#define inv15 !(il_in_10 == true && il_out_10 == false) || (B == b + 1);
+
+// inv16: il_in_10 = FALSE /\ il_out_10 = TRUE  => B = b-1
+#define inv16 !(il_in_10 == false && il_out_10 == true) || (B == b - 1);
+
+// inv17: il_in_10 = FALSE /\ il_out_10 = FALSE => B = b
+#define inv17 !(il_in_10 == false && il_out_10 == false) || (B == b);
+
+// inv18: il_out_10 = TRUE  /\ ml_in_10 = TRUE  => C = c
+#define inv18 !(il_out_10 == true && ml_in_10 == true) || (C == c);
+
+// inv19: il_out_10 = TRUE  /\ ml_in_10 = FALSE => C = c+1
+#define inv19 !(il_out_10 == true && ml_in_10 == false) || (C == c + 1);
+
+// inv20: il_out_10 = FALSE /\ ml_in_10 = TRUE  => C = c-1
+#define inv20 !(il_out_10 == false && ml_in_10 == true) || (C == c - 1);
+
+// inv21: il_out_10 = FALSE /\ ml_in_10 = FALSE => C = c
+#define inv21 !(il_out_10 == false && ml_in_10 == false) || (C == c);
+
+// inv22: A = 0 OR C = 0 (no head-on collision)
+#define inv22 (A == 0 || C == 0);
+
+// inv23: A + B + C <= d (capacity never exceeded)
+#define inv23 (A + B + C <= d);
+
+// inv24: A >= 0
+#define inv24 (A >= 0);
+
+// inv25: B >= 0
+#define inv25 (B >= 0);
+
+// inv26: C >= 0
+#define inv26 (C >= 0);
+
+
+#assert System() |= [] inv1;
+#assert System() |= [] inv2;
+#assert System() |= [] inv3;
+#assert System() |= [] inv4;
+#assert System() |= [] inv5;
+#assert System() |= [] inv6;
+#assert System() |= [] inv7;
+#assert System() |= [] inv8;
+#assert System() |= [] inv9;
+#assert System() |= [] inv10;
+#assert System() |= [] inv11;
+#assert System() |= [] inv12;
+#assert System() |= [] inv13;
+#assert System() |= [] inv14;
+#assert System() |= [] inv15;
+#assert System() |= [] inv16;
+#assert System() |= [] inv17;
+#assert System() |= [] inv18;
+#assert System() |= [] inv19;
+#assert System() |= [] inv20;
+#assert System() |= [] inv21;
+#assert System() |= [] inv22;
+#assert System() |= [] inv23;
+#assert System() |= [] inv24;
+#assert System() |= [] inv25;
+#assert System() |= [] inv26;
+

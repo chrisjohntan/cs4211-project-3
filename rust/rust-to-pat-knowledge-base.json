@@ -1,0 +1,439 @@
+{
+  "metadata": {
+    "title": "Rust-to-PAT CSP# Conversion Knowledge Base",
+    "description": "A self-contained reference for converting concurrent Rust systems into PAT CSP# formal models. Includes PAT syntax rules, common pitfalls, and 9 systematic conversion rules. Designed for use by LLMs or human modelers.",
+    "version": "1.1",
+    "usage": "Given a Rust source file with concurrent synchronization primitives, apply the conversion_rules in order (Rule 1 through Rule 9) to produce a PAT CSP# model. Consult pat_syntax for language mechanics and pitfalls to avoid grammar errors."
+  },
+
+  "pat_syntax": {
+    "general_info": [
+      "PAT's system implementation is process-oriented, centering around events, processes, and their interactions to model and verify system behaviors.",
+      "PAT extends the classic process algebra, Communicating Sequential Processes (CSP), by supporting standard CSP syntax while introducing additional constructs such as mutable variables, imperative-style state updates, and model-checking capabilities.",
+      "While CSP process interaction remains the foundation, PAT incorporates features reminiscent of C#, such as structured variable declarations, conditional expressions, and imperative-style assignments.",
+      "For model checking, we focus on three aspects: Deadlock-freeness, Reachability, and LTL properties."
+    ],
+
+    "pitfalls_rules": {
+      "1_semicolons": {
+        "rule": "Semicolons are generally required after all statements. The only exception is inside process expressions (e.g., with ->, [], or |||), where semicolons are not used.",
+        "examples": [
+          "#define N 5;",
+          "var board[N*N];",
+          "D() = e2 -> p3 -> D();",
+          "E() = B() [] C();",
+          "#assert A deadlockfree;"
+        ]
+      },
+
+      "2_constants": {
+        "rule": "Use #define to declare named integer constants. The value must be a literal integer or a simple arithmetic expression of literals.",
+        "examples": [
+          "#define max 5;",
+          "#define N 2;"
+        ]
+      },
+
+      "2_1_no_chained_defines": {
+        "rule": "A #define value must be a literal (integer or expression of literals). It CANNOT reference another #define constant. PAT does not resolve nested macro expansions — using one #define inside another will cause an 'undefined' grammar error.",
+        "bad_examples": [
+          "#define N 2; #define NO_OWNER N;  // ERROR: NO_OWNER sees 'N' as undefined symbol",
+          "#define SIZE 4; #define LAST SIZE;  // ERROR: same issue"
+        ],
+        "good_examples": [
+          "#define N 2; #define NO_OWNER 2;  // OK: use the literal value directly",
+          "#define N 2; #define LAST_INDEX 1;  // OK: manually compute N-1 and hardcode"
+        ],
+        "fix_strategy": "When a constant's value logically depends on another constant, manually compute and hardcode the literal value. Add a comment to document the relationship (e.g., // must equal N)."
+      },
+
+      "3_variables": {
+        "rule": "Declare shared variables using the var keyword.",
+        "examples": [
+          "var knight = 0;",
+          "var engine = off;"
+        ]
+      },
+
+      "4_array_initialization": {
+        "rule_4_1": "Use square brackets [] to list out the values of the array.",
+        "examples_4_1": [
+          "var owner[N] = [far, far];",
+          "var board = [3, 5, 6, 0, 2, 7];"
+        ],
+        "rule_4_2": "For PAT's 2D arrays, values must be initialized with a single flat list. Nested lists are NOT supported.",
+        "examples_4_2": [
+          "var board[2][3] = [0,0,0,1,1,1];"
+        ]
+      },
+
+      "5_enumerations": {
+        "rule": "Use curly brackets {} immediately after the keyword enum, enclosing the values without specifying a name.",
+        "examples": [
+          "enum {unlock, lock, open};",
+          "enum {off, on};"
+        ]
+      },
+
+      "6_system_definitions": {
+        "6_1_guarded_conditions": {
+          "rule": "Use square brackets [] to enclose the guard condition that must be satisfied to execute the guarded process.",
+          "syntax": "[cond] Process",
+          "examples": [
+            "[owner[i] == far]",
+            "[key == i && owner[i] == in]",
+            "[owner[i] == near || owner[i] == far]"
+          ]
+        },
+        "6_2_process_definition": {
+          "rule": "Each process definition should typically transition back to itself or another process using the -> operator to ensure continuity. If a process does not transition, it will terminate, which may lead to unintended deadlocks or premature termination unless explicitly intended.",
+          "examples": [
+            "VM() = insertcoin -> coffee -> VM();",
+            "owner_pos(i) = [owner[i] == far] towards.i{owner[i] = near;} -> owner_pos(i);"
+          ],
+          "note": "Data operations can take place inside events, e.g., towards.i{owner[i] = near;}"
+        },
+        "6_3_process_assembling": {
+          "interleaving": {
+            "use": "When multiple processes can run concurrently without barrier synchronization.",
+            "syntax": "||| x:{0..n} @ P(x)",
+            "example": "car() = ||| i:{0..N-1} @ (owner_pos(i) ||| key_pos(i) ||| door_op(i) ||| motor(i));"
+          },
+          "parallel_composition": {
+            "use": "When multiple processes run with barrier synchronization.",
+            "syntax": "|| x:{0..n} @ P(x)",
+            "example": "College() = ||x:{0..N-1}@(Phil(x)||Fork(x));"
+          },
+          "choices": {
+            "use": "When only one process will be selected to execute at a time.",
+            "syntax": "[] x:{0..n} @ P(x)"
+          },
+          "infinite_processes": {
+            "syntax": "|||{..} @ (P() ||| Q());"
+          },
+          "interrupt": {
+            "syntax": "sys = (|||i:{0..N-1} @ (process1(i) ||| process2(i))) interrupt (action1 -> action2 -> Stop);"
+          }
+        }
+      },
+
+      "7_assertions": {
+        "7_1_deadlock_freeness": {
+          "syntax": "#assert System() deadlockfree;",
+          "keyword": "deadlockfree"
+        },
+        "7_2_reachability": {
+          "syntax": "#define goal1 (!on && dim == 50); #assert System() reaches goal1;",
+          "keyword": "reaches",
+          "note": "Define states first, then use 'reaches' in the assertion."
+        },
+        "7_3_ltl_properties": {
+          "rule": "All states (if any are involved) need to be separately defined before composing the LTL formula in the assertion. LTL operators should only appear in assertions, not state definitions.",
+          "examples": [
+            "#assert System() |= [](turnOn -> <> turnOff);",
+            "#define light50 (on && dim==50); #assert System() |= []<>light50;"
+          ]
+        }
+      }
+    }
+  },
+
+  "conversion_rules": {
+    "overview": "These 9 rules provide a systematic method for converting a concurrent Rust system (especially synchronization primitives like SpinLock, Mutex, RwMutex) into a PAT CSP# model. Apply them in order: Rules 1-4 handle data declarations, Rule 5-6 handle operations, Rule 7-8 handle advanced patterns, and Rule 9 handles verification properties.",
+
+    "rule_1_atomic_variables_to_shared_pat_variables": {
+      "summary": "Each Rust atomic variable should be mapped to a shared PAT variable with a finite integer range.",
+      "rationale": "PAT requires finite state spaces. Atomic variables in Rust are inherently shared across threads and represent the core synchronization state, making them the natural candidates for shared PAT variables.",
+      "mappings": [
+        {
+          "rust_construct": "AtomicBool (e.g., lock)",
+          "pat_equivalent": "var lock : {0..1}; where 0 = false, 1 = true",
+          "reason": "Captures locked/unlocked control state"
+        },
+        {
+          "rust_construct": "AtomicUsize used as counter",
+          "pat_equivalent": "var counter : {0..N}; where N is a chosen upper bound",
+          "reason": "Finite-range approximation of unbounded counter"
+        },
+        {
+          "rust_construct": "AtomicU8 used as enum/state",
+          "pat_equivalent": "var state : {0..K}; with #define for each variant",
+          "reason": "Maps each variant to an integer"
+        }
+      ],
+      "identification_tip": "Atomic variables are the first to identify when reading Rust source code. Look for AtomicBool, AtomicU8, AtomicUsize, AtomicU32, etc."
+    },
+
+    "rule_2_implicit_ownership_to_explicit_owner_variable": {
+      "summary": "In Rust, lock ownership is implicit — encoded through the existence of a guard object (e.g., SpinLockGuard_, MutexGuard_) and enforced by the type system and lifetimes. Since PAT has no type system or object lifetime tracking, ownership must be made explicit using a dedicated variable.",
+      "pattern": "Introduce a variable: var owner : {NO_OWNER, 0, 1, ..., N-1}; where N is the number of threads and NO_OWNER is a sentinel value (typically N or -1).",
+      "important_pitfall": "When defining NO_OWNER as a #define constant, use a literal value, NOT a reference to another #define (see pitfall rule 2.1). For example: #define NO_OWNER 2; // must equal N, NOT #define NO_OWNER N;",
+      "rationale": "Ownership information is critical for verifying properties such as mutual exclusion (only one owner at a time), lock-release correctness (only the owner can release), and no-invalid-unlock (a non-owner cannot call release). In Rust these are enforced at compile time by the borrow checker; in PAT they become explicit invariants to verify.",
+      "advanced_coexistence": {
+        "when": "When a system supports multiple guard types with different coexistence semantics (e.g., RwMutex: Read, Write, Upgradeable), the simple owner variable is insufficient.",
+        "solution": "Use multiple tracking variables for each guard type with explicit invariants on coexistence.",
+        "mappings": [
+          {
+            "rust_construct": "Multiple readers (no writers)",
+            "pat_equivalent": "var readers : {0..MAX_READERS}; var has_writer : {0..1};"
+          },
+          {
+            "rust_construct": "One writer (exclusive)",
+            "pat_equivalent": "var has_writer : {0..1};"
+          },
+          {
+            "rust_construct": "One upgradeable reader",
+            "pat_equivalent": "var has_upgradeable : {0..1};"
+          },
+          {
+            "rust_construct": "Conditional wake after release",
+            "pat_equivalent": "var being_upgraded : {0..1};"
+          }
+        ]
+      }
+    },
+
+    "rule_3_rust_enums_and_flags_to_define_constants": {
+      "summary": "Rust enums, boolean flags, and named state indicators should be converted to #define integer constants in PAT. This includes any named states that appear in the concurrent protocol.",
+      "rationale": "PAT does not support user-defined types or enums. Integer constants with descriptive #define names preserve readability while maintaining a finite, enumerable state space.",
+      "mappings": [
+        {
+          "rust_construct": "enum State { Free, Locked }",
+          "pat_equivalent": "#define FREE 0; #define LOCKED 1;"
+        },
+        {
+          "rust_construct": "bool fields (non-atomic)",
+          "pat_equivalent": "#define FALSE 0; #define TRUE 1;"
+        },
+        {
+          "rust_construct": "Multi-variant enums",
+          "pat_equivalent": "#define VARIANT_A 0; #define VARIANT_B 1; // etc."
+        }
+      ]
+    },
+
+    "rule_4_struct_fields_to_variables_constants_or_omissions": {
+      "summary": "Each Rust struct that participates in the concurrent protocol should be examined for fields that affect synchronization behavior. Fields fall into three categories.",
+      "categories": [
+        {
+          "category": "Shared mutable fields (accessed by multiple threads)",
+          "rust_construct": "AtomicBool, AtomicUsize, etc.",
+          "pat_equivalent": "var fieldName : {min..max};",
+          "action": "Model as PAT shared variable (see Rule 1)"
+        },
+        {
+          "category": "Configuration/immutable fields (fixed at initialization)",
+          "rust_construct": "Const generics, config parameters",
+          "pat_equivalent": "#define FIELD_NAME value;",
+          "action": "Model as PAT constant"
+        },
+        {
+          "category": "Type-system artifacts (no runtime behavior)",
+          "rust_construct": "UnsafeCell<T>, PhantomData<T>, !Send, Sync markers",
+          "pat_equivalent": "Omitted entirely",
+          "action": "Do not model. These are compile-time only."
+        }
+      ],
+      "protected_data_note": "The protected data itself (the T inside UnsafeCell<T>) is not modeled. Instead, access to the critical section is captured through enter.i and exit.i events. The PAT model verifies that these events are properly sequenced (only occur while holding the lock), which is the formal equivalent of verifying that UnsafeCell access only occurs while holding the lock.",
+      "bitfield_decomposition": {
+        "when": "When one AtomicUsize encodes multiple flags (e.g., RwMutex with WRITER, UPGRADEABLE_READER, BEING_UPGRADED, reader count).",
+        "option_a": "Full Decomposition: Each bit or field group becomes a separate variable. Bit-level operations (fetch_or, fetch_and) become updates to these variables.",
+        "option_b": "Single Variable with Bit-Level Guards: Keep a single bounded variable lock : {0..K} and define #define bit masks. Guards check bit conditions using bitwise operations."
+      }
+    },
+
+    "rule_5_cas_to_atomic_guard_action_blocks": {
+      "summary": "Rust's compare_exchange, compare_exchange_weak, and swap operations on atomics are the fundamental building blocks of lock acquisition. These must be translated to atomic blocks in PAT to prevent interleaving in the middle of a CAS operation.",
+      "rationale": "CAS is an atomic hardware operation. If modeled as separate 'check' and 'set' steps with possible interleaving, the model would admit impossible behaviors (e.g., two threads both observing lock == 0 and both setting it to 1). The atomic block in PAT ensures this indivisibility.",
+      "memory_ordering_note": "The Ordering parameters (Acquire, Release, Relaxed) specify memory ordering guarantees in Rust, but under PAT's interleaving semantics all shared variable accesses are sequentially consistent, so memory orderings are not modeled — they are subsumed by PAT's default semantics.",
+      "mappings": [
+        {
+          "rust_construct": "lock.compare_exchange(false, true) succeeds",
+          "pat_equivalent": "[lock == 0] event.i { lock = 1; owner = i; }",
+          "note": "Guard checks expected value; action block atomically sets new value and records owner."
+        },
+        {
+          "rust_construct": "lock.compare_exchange(false, true) fails",
+          "pat_equivalent": "[lock == 1] -> branch to fail/retry path",
+          "note": "Modeled as a separate, mutually exclusive branch."
+        },
+        {
+          "rust_construct": "lock.store(false, Release)",
+          "pat_equivalent": "event.i { lock = 0; owner = NO_OWNER; }",
+          "note": "Unconditional store becomes an event with an action block."
+        }
+      ],
+      "key_principle": "The success and failure branches of the CAS must be modeled as separate, mutually exclusive paths using the external choice operator []."
+    },
+
+    "rule_6_trylock_vs_blocking_acquisition": {
+      "summary": "All synchronization primitives (SpinLock, Mutex, RwMutex) provide two fundamentally different acquisition APIs that require different PAT modeling strategies.",
+      "try_lock": {
+        "rust_methods": ["try_lock()", "try_read()", "try_write()", "try_upread()"],
+        "behavior": "Non-blocking, return immediately with success or failure.",
+        "pat_pattern": "[lock == 0] acquire.i { lock = 1; owner = i; } [] [lock == 1] tryfail.i { }",
+        "examples": [
+          {
+            "rust": "pub fn try_lock(&self) -> Option<SpinLockGuard<T, G>>",
+            "pat": "[lock == 0] acquire.i { lock = 1; owner = i; } [] [lock == 1] tryfail.i { }"
+          },
+          {
+            "rust": "pub fn try_read(&self) -> Option<RwMutexReadGuard<T>>",
+            "pat": "[!has_writer && !being_upgraded] acquire_read.i { readers += 1; } [] [has_writer || being_upgraded] tryfail_read.i { }"
+          },
+          {
+            "rust": "pub fn try_write(&self) -> Option<RwMutexWriteGuard<T>>",
+            "pat": "[lock == 0] acquire_write.i { lock = 1; owner = i; } [] [lock != 0] tryfail_write.i { }"
+          }
+        ]
+      },
+      "blocking": {
+        "rust_methods": ["lock()", "read()", "write()", "upread()"],
+        "behavior": "Block until successful, integrated with WaitQueue for fairness (except SpinLock which busy-waits).",
+        "spinlock_pat_pattern": "[lock == 0] acquire.i { lock = 1; owner = i; } -> ... [] [lock == 1] spin.i -> Lock(i)",
+        "note_spinlock": "SpinLock uses busy-waiting (spin loop). Modeled as guarded recursion — the process retries via a spin event when the lock is held.",
+        "note_mutex_rwmutex": "Mutex and RwMutex use WaitQueue for blocking. See Rule 7."
+      }
+    },
+
+    "rule_7_waitqueue_abstraction_and_wake_semantics": {
+      "summary": "Blocking acquisition relies on a WaitQueue abstraction to: put threads to sleep when the lock is unavailable, wake waiting threads when the lock is released, and impose a fairness discipline (FIFO, round-robin, etc.).",
+      "critical_note": "SpinLock does NOT use a WaitQueue; instead, it busy-waits (spins). This difference is critical for both modeling and verification.",
+      "mappings": [
+        {
+          "rust_construct": "self.queue.wait_until(...)",
+          "pat_equivalent": "block.i { waiting[i] = 1; } -> (loop until woken) -> woken.i { permit[i] = 0; }",
+          "note": "Thread marks itself as waiting, then waits for a permit/wake signal."
+        },
+        {
+          "rust_construct": "self.queue.wake_one()",
+          "pat_equivalent": "unlock.i { lock = 0; permit[j] = 1; }",
+          "note": "Release the lock and wake one waiting thread by setting its permit."
+        },
+        {
+          "rust_construct": "self.queue.wake_all()",
+          "pat_equivalent": "write_unlock.i { lock = 0; for_each j in waiting: permit[j] = 1; }",
+          "note": "Release and wake all waiting threads."
+        }
+      ]
+    },
+
+    "rule_8_atomic_fetch_modify_check_patterns": {
+      "summary": "RwMutex extensively uses atomic fetch-and-modify operations (like fetch_add(), fetch_sub(), fetch_or(), fetch_and()) where the operation returns the old value. The caller checks the old value against some condition. If the check fails, the operation must be rolled back (or never executed).",
+      "rationale": "This is a subtle but critical pattern that requires careful PAT modeling to avoid introducing impossible behaviors.",
+      "pattern": "Model as: (1) guard checks the precondition, (2) action block performs the modification atomically, (3) failure branch either rolls back or skips.",
+      "example": {
+        "rust": "self.lock.fetch_and(!WRITER, Release); self.inner.queue.wake_all();",
+        "pat": "release_write.i { has_writer = 0; for_each i in waiting: permit[i] = 1; }"
+      }
+    },
+
+    "rule_9_assertions": {
+      "summary": "Define verification properties to check the correctness of the modeled system.",
+      "assertion_types": [
+        {
+          "property": "Deadlock freedom",
+          "description": "The system never gets permanently stuck in a state with no further moves.",
+          "pat_syntax": "#assert System() deadlockfree;",
+          "note": "This is typically the first assertion to write. Maps directly to safety requirements."
+        },
+        {
+          "property": "Mutual exclusion (safety invariant)",
+          "description": "At most one thread may be in the critical section at any time (for exclusive locks).",
+          "pat_syntax": "#define MutexViolation (in_cs[0] == 1 && in_cs[1] == 1); #assert System() |= []!MutexViolation;",
+          "note": "Use auxiliary in_cs[i] variables to track critical section occupancy."
+        },
+        {
+          "property": "Reachability / liveness",
+          "description": "A desired state is reachable (e.g., a thread can enter the critical section). Also useful for checking that blocking is possible.",
+          "pat_syntax": "#define T0InCS (in_cs[0] == 1); #assert System() reaches T0InCS;",
+          "note": "Verify that each thread can reach the critical section in at least one execution."
+        },
+        {
+          "property": "Bad state unreachable",
+          "description": "A known-bad state should never be reachable.",
+          "pat_syntax": "#define BAD (...); #assert System() reaches BAD;",
+          "note": "If the assertion is VALID (reachable), there is a bug. If NOT VALID, the bad state is unreachable (good)."
+        },
+        {
+          "property": "Safety invariant (always)",
+          "description": "A property that must hold in every reachable state.",
+          "pat_syntax": "#define P (...); #assert System() |= [] P;"
+        }
+      ],
+      "liveness_caveat": "Spin locks do NOT guarantee starvation-freedom. An LTL assertion like [](acquiring -> <>entered) will FAIL because PAT explores all interleavings including unfair schedules where one thread is perpetually starved. This is expected and correct — do NOT include starvation-freedom assertions for spin locks unless using fairness assumptions."
+    }
+  },
+
+  "conversion_workflow": {
+    "description": "Step-by-step procedure for converting a Rust concurrent system to PAT CSP#.",
+    "steps": [
+      {
+        "step": 1,
+        "action": "Identify atomic variables",
+        "rule": "Rule 1",
+        "detail": "Scan the Rust source for AtomicBool, AtomicU8, AtomicUsize, etc. Each becomes a bounded PAT variable."
+      },
+      {
+        "step": 2,
+        "action": "Introduce explicit ownership",
+        "rule": "Rule 2",
+        "detail": "For each lock type, add var owner with a NO_OWNER sentinel. Use a literal value for NO_OWNER (not a reference to another #define)."
+      },
+      {
+        "step": 3,
+        "action": "Convert enums and flags",
+        "rule": "Rule 3",
+        "detail": "Map all Rust enums, bool flags, and named states to #define integer constants."
+      },
+      {
+        "step": 4,
+        "action": "Analyze struct fields",
+        "rule": "Rule 4",
+        "detail": "Classify each field as shared mutable (→ var), config (→ #define), or type-system artifact (→ omit). Do NOT model UnsafeCell<T> contents or PhantomData."
+      },
+      {
+        "step": 5,
+        "action": "Model CAS operations",
+        "rule": "Rule 5",
+        "detail": "Translate compare_exchange into atomic guard-action blocks. Model success and failure as mutually exclusive branches with []."
+      },
+      {
+        "step": 6,
+        "action": "Model acquisition methods",
+        "rule": "Rule 6",
+        "detail": "Distinguish try-lock (non-blocking, immediate return) from blocking lock (spin or WaitQueue). SpinLock spins; Mutex/RwMutex use WaitQueue."
+      },
+      {
+        "step": 7,
+        "action": "Model WaitQueue if applicable",
+        "rule": "Rule 7",
+        "detail": "If the lock uses WaitQueue (Mutex, RwMutex), model wait/wake semantics with permit variables. Skip for SpinLock."
+      },
+      {
+        "step": 8,
+        "action": "Model fetch-modify-check patterns",
+        "rule": "Rule 8",
+        "detail": "For atomic fetch_add/fetch_sub/fetch_or/fetch_and with post-check, ensure the guard prevents impossible states. Roll back on failure."
+      },
+      {
+        "step": 9,
+        "action": "Write assertions",
+        "rule": "Rule 9",
+        "detail": "Add deadlock-freeness, mutual exclusion, reachability, and safety invariant assertions. Do NOT assert starvation-freedom for spin locks."
+      }
+    ]
+  },
+
+  "known_pitfalls_summary": [
+    "Never chain #define references: #define A B; where B is another #define will cause 'undefined' errors. Always use literal values.",
+    "Semicolons are required after #define, var, and #assert statements, but NOT inside process expressions (after ->, [], |||).",
+    "Every process should eventually transition (via ->) back to itself or another process, otherwise it terminates and may cause unintended deadlock.",
+    "Array initializers must use flat lists, even for 2D arrays.",
+    "LTL operators ([], <>, U) must only appear in #assert statements, never inside #define state definitions.",
+    "Do not assert starvation-freedom (liveness under fairness) for spin locks — they do not guarantee it, and the assertion will correctly fail.",
+    "Memory orderings (Acquire, Release, Relaxed) from Rust are NOT modeled in PAT — all shared variable accesses are sequentially consistent under PAT's interleaving semantics.",
+    "The protected data inside UnsafeCell<T> is never modeled. Use enter/exit events to abstract critical section access.",
+    "CAS must be modeled as a single atomic guard-action block. Never split the check and set into separate steps with possible interleaving."
+  ]
+}

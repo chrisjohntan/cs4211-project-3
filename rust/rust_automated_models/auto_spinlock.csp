@@ -1,0 +1,147 @@
+// ============================================================
+// PAT CSP# Model: SpinLock (from Rust ostd SpinLock)
+// ============================================================
+// Source: spin.rs — a test-and-set spin lock with guard-based
+//         ownership, providing lock(), try_lock(), and
+//         automatic release on guard Drop.
+// ============================================================
+
+// -------------------- Constants ----------------------------
+// Rule 3: Rust enums, booleans, and state flags → #define constants
+#define N 2;                // Number of threads (configurable)
+#define UNLOCKED 0;         // AtomicBool false
+#define LOCKED 1;           // AtomicBool true
+#define NO_OWNER 2;         // Sentinel: no thread owns the lock (must equal N)
+
+// -------------------- Shared Variables ---------------------
+// Rule 1: AtomicBool lock → bounded PAT variable {0..1}
+var lock = UNLOCKED;
+
+// Rule 2: Implicit ownership (Rust guard lifetime) → explicit owner variable
+//   In Rust, ownership is encoded by the existence of SpinLockGuard_.
+//   PAT has no type system, so we track the owner explicitly.
+var owner = NO_OWNER;
+
+// Rule 4: Struct field analysis
+//   - AtomicBool lock        → var lock (shared mutable, modeled above)
+//   - UnsafeCell<T> val      → not modeled; access captured via enter/exit events
+//   - PhantomData<G>         → type-system artifact, omitted entirely
+
+// Auxiliary variable: tracks whether thread i is in the critical section
+//   (used for mutual exclusion verification)
+var in_cs[N] = [0, 0];
+
+// ============================================================
+// Process Definitions
+// ============================================================
+
+// ------------------------------------------------------------
+// Blocking acquisition: SpinLock::lock()
+// ------------------------------------------------------------
+// Rust: pub fn lock(&self) -> SpinLockGuard<T, G>
+//   1. G::guard() creates the inner guard (preempt/IRQ disable)
+//   2. self.acquire_lock() spins via try_acquire_lock()
+//   3. Returns SpinLockGuard_ holding the lock
+//
+// Rule 5 (CAS): compare_exchange(false, true, Acquire, Relaxed)
+//   Success: [lock == UNLOCKED] → atomically set lock=LOCKED, owner=i
+//   Failure: [lock == LOCKED]   → retry (spin loop)
+//
+// Rule 6 (Blocking): acquire_lock() loops with spin_loop() hint
+//   Modeled as guarded recursion — the process blocks when guard is false,
+//   which is the PAT abstraction of busy-waiting.
+// ------------------------------------------------------------
+Lock(i) =
+    [lock == UNLOCKED] acquire.i{lock = LOCKED; owner = i;} -> EnterCS(i)
+    []
+    [lock == LOCKED] spin.i -> Lock(i);
+
+// ------------------------------------------------------------
+// Non-blocking acquisition: SpinLock::try_lock()
+// ------------------------------------------------------------
+// Rust: pub fn try_lock(&self) -> Option<SpinLockGuard<T, G>>
+//   Attempts CAS once; returns Some(guard) on success, None on failure.
+//
+// Rule 6 (Try-Lock): non-blocking, returns immediately
+// ------------------------------------------------------------
+TryLock(i) =
+    [lock == UNLOCKED] try_acquire.i{lock = LOCKED; owner = i;} -> EnterCS(i)
+    []
+    [lock == LOCKED] tryfail.i -> TryLockDone(i);
+
+TryLockDone(i) = trylockdone.i -> Skip;
+
+// ------------------------------------------------------------
+// Critical section access (Deref / DerefMut on SpinLockGuard_)
+// ------------------------------------------------------------
+// Rule 4: The T inside UnsafeCell<T> is not modeled.
+//   Access to the protected data is captured through enter.i / exit.i events.
+//   PAT verifies that these events are properly sequenced (i.e., only occur
+//   while the lock is held), which is the formal equivalent of verifying
+//   that UnsafeCell access only occurs while holding the lock.
+// ------------------------------------------------------------
+EnterCS(i) = enter.i{in_cs[i] = 1;} -> exit.i{in_cs[i] = 0;} -> Unlock(i);
+
+// ------------------------------------------------------------
+// Release: SpinLockGuard_::drop()
+// ------------------------------------------------------------
+// Rust: fn drop(&mut self) { self.lock.release_lock(); }
+//   release_lock: self.inner.lock.store(false, Ordering::Release)
+//
+// Rule 5: lock.store(false, Release) → atomic event resetting lock and owner
+// ------------------------------------------------------------
+Unlock(i) = release.i{lock = UNLOCKED; owner = NO_OWNER;} -> Lock(i);
+
+// ============================================================
+// System Assembly
+// ============================================================
+// Rule 6.3 (Interleaving): Multiple threads run concurrently
+//   without barrier synchronization — each independently
+//   competes for the spin lock via interleaving.
+//
+// SpinLock does NOT use a WaitQueue (Rule 7): it busy-waits,
+//   so no fairness discipline or wake semantics are needed.
+// ============================================================
+System() = ||| i:{0..N-1} @ Lock(i);
+
+// System with try_lock behavior
+TryLockSystem() = ||| i:{0..N-1} @ TryLock(i);
+
+// ============================================================
+// Assertions (Rule 9)
+// ============================================================
+
+// 1. Deadlock-freeness
+//    The system should never get permanently stuck.
+//    (SpinLock with finite threads and guaranteed release should be deadlock-free.)
+#assert System() deadlockfree;
+
+// 2. Mutual exclusion (safety invariant)
+//    At most one thread may be in the critical section at any time.
+//    This is the core guarantee of the SpinLock.
+#define MutualExclusionViolation (in_cs[0] == 1 && in_cs[1] == 1);
+#assert System() |= []!MutualExclusionViolation;
+
+// 3. Lock-release correctness
+//    Only the lock owner can be in the critical section.
+#define InvalidCS0 (in_cs[0] == 1 && owner != 0);
+#define InvalidCS1 (in_cs[1] == 1 && owner != 1);
+#define OwnershipViolation (InvalidCS0 || InvalidCS1);
+#assert System() |= []!OwnershipViolation;
+
+// 4. No invalid unlock
+//    The lock should never be released by a non-owner.
+//    (Structurally guaranteed by the process model — only the thread
+//     that acquired the lock reaches the Unlock process.)
+
+// 5. Reachability: every thread can eventually enter the critical section
+#define T0InCS (in_cs[0] == 1);
+#define T1InCS (in_cs[1] == 1);
+#assert System() reaches T0InCS;
+#assert System() reaches T1InCS;
+
+// 6. Liveness (LTL): if a thread attempts to acquire, it eventually enters CS
+//    (This holds because the lock is always released, and PAT explores all interleavings.)
+#define t0_acquiring (lock == LOCKED && owner != 0 && in_cs[0] == 0);
+#define t0_entered (in_cs[0] == 1);
+#assert System() |= [](t0_acquiring -> <>t0_entered);

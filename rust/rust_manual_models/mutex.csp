@@ -1,0 +1,81 @@
+﻿// ===== Mutex + WaitQueue (2 threads) =====
+
+// constants
+#define N 2;
+#define NO_OWNER 2;
+
+// shared mutex state
+var lock = 0;
+var owner = NO_OWNER;
+var csCount = 0;
+
+// wait queue abstraction
+var waiting = [0,0];
+var permit  = [0,0];
+
+// ---- Thread behavior ----
+Thread(i) =
+  noncrit.i ->
+  ( TryLock(i) <> Lock(i) );
+
+
+// ---- try_lock(): Compare And Swap ----
+TryLock(i) =
+    trylock.i ->
+    (
+        [lock == 0] acquire_try.i{ lock = 1; owner = i; csCount = csCount + 1; } -> CS(i)
+        []
+        [lock != 0] tryfail.i -> Thread(i)
+    );
+
+
+// ---- lock(): blocking wait_until(|| try_lock()) ----
+Lock(i) =
+  lockcall.i -> AcquireOrWait(i);
+
+
+AcquireOrWait(i) =
+    [lock == 0] acquire_lock.i{ lock = 1; owner = i; csCount = csCount + 1; } -> CS(i)
+    []
+    [lock != 0] block.i{ waiting[i] = 1; } -> Wait(i);
+
+
+Wait(i) =
+  [permit[i] == 1] woken.i{ permit[i] = 0; waiting[i] = 0; } -> AcquireOrWait(i);
+
+
+// ---- critical section then unlock (release + wake_one) ----
+CS(i) =
+  critical.i ->
+  unlock.i{
+      csCount = csCount - 1;
+      lock = 0;
+      owner = NO_OWNER;
+
+      if (waiting[0] == 1) { permit[0] = 1; }
+      else if (waiting[1] == 1) { permit[1] = 1; }
+  } -> Thread(i);
+
+
+// ---- system: two threads interleaving ----
+System() = (||| i:{0..N-1} @ Thread(i));
+
+
+// ===== Verification =====
+
+// (1) Deadlock freedom
+#assert System() deadlockfree;
+
+// (2) Mutual exclusion: at most one thread in CS
+#define ME (csCount <= 1);
+#assert System() |= [] ME;
+
+// (3) Owner/lock consistency
+#define LockOwner0 ( (lock != 0) || (owner == NO_OWNER) );
+#define LockOwner1 ( (owner == NO_OWNER) || (lock == 1) );
+#assert System() |= [] LockOwner0;
+#assert System() |= [] LockOwner1;
+
+// (4) Reachability sanity: can a thread ever be forced to wait
+#define someWait (waiting[0] == 1 || waiting[1] == 1);
+#assert System() reaches someWait;

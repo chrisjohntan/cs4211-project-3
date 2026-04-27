@@ -1,0 +1,415 @@
+================================================================
+RULES FOR CONVERTING EVENT-B TO PAT CSP#
+================================================================
+
+SCOPE
+-----
+These rules describe a purely syntactic translation from Event-B
+to PAT CSP#. The translator does not interpret the semantics of
+the modelled system. It reads the structure of the Event-B source
+and produces equivalent PAT constructs mechanically.
+
+Invariants and assertions are excluded from the translation and
+must be handled manually by the verifying user.
+
+The EXTENDS, REFINES, and SEES fields in Event-B CONTEXT and
+MACHINE blocks are ignored by the translator. Only the content
+directly present in the provided input is processed.
+
+This ruleset should be supplemented with the syntax dataset file
+for PAT.
+
+The pipeline should annotate the generated PAT output with
+comments indicating which rule was applied for each translated
+construct. For example:
+
+    // Rule 1: numeric constant from context
+    #define x 5;
+
+    // Rule 3A: standard initialisation
+    var active = false;
+
+================================================================
+RULE 1 — Contexts to Global Constants
+================================================================
+
+For each CONSTANT in a CONTEXT where the axiom is a numeric
+constraint (e.g. x > 0, x >= 0), emit:
+
+    #define <name> <value>;
+
+Where the value satisfies the constraint. The value assigned
+by the pipeline is valid as long as it satisfies all constraints
+on it as described by the Event-B system.
+
+Example:
+    Event-B:    CONSTANTS: [ "x" ]
+                AXIOMS: x > 0
+    PAT:        #define x 5;
+
+Undefined constants:
+
+It may be possible for Event-B guards or events to reference
+a constant that was not defined in the context of the system.
+This could be due to the constant being present in an earlier
+refinement or external context which has not been provided.
+
+In this case, the translator should infer the role of the
+constant from how it is used in the events and guards of the
+provided source (e.g., as a loop bound, array size, or
+termination condition), then select a reasonable value
+accordingly. Once a value has been selected, it can be defined
+using the same #define syntax as above.
+
+================================================================
+RULE 2 — Contexts to Constant Enumerations
+================================================================
+
+For each CONTEXT where the axiom contains the partition keyword
+in the form of partition(P, {val1}, {val2}, ...), the constants
+val1, val2, etc. are the members of an enumerated set in PAT.
+
+The corresponding PAT declaration is:
+
+    enum {val1, val2, ...};
+
+The name of the CONTEXT and SETS are discarded. Only the member
+values from the partition axiom are carried into the PAT
+constant enumeration.
+
+Example:
+    Event-B:    SETS: [ "Colour" ]
+                CONSTANTS: [ "red", "blue" ]
+                AXIOMS: partition(Colour, {red}, {blue})
+    PAT:        enum {red, blue};
+
+================================================================
+RULE 3 — Initialisation Event
+================================================================
+
+The INITIALISATION event itself does not produce a PAT event.
+It is used solely to extract initial values for variable
+declarations.
+
+----------------------------------------------------------------
+Rule 3A — Standard Initialisation
+----------------------------------------------------------------
+
+For each variable in the VARIABLES field, read its initial
+value from the THEN block of the INITIALISATION event and emit:
+
+    var <name> = <initial_value>;
+
+Apply the following mapping:
+
+    Event-B TRUE        ->   PAT true
+    Event-B FALSE       ->   PAT false
+    Numeric values      ->   same value verbatim
+    Enum values         ->   same name verbatim (e.g. idle, off)
+
+Example:
+    Event-B:    x := 0          PAT:    var x = 0;
+    Event-B:    active := FALSE PAT:    var active = false;
+    Event-B:    mode := idle    PAT:    var mode = idle;
+
+----------------------------------------------------------------
+Rule 3B — Empty-set Initialisation
+----------------------------------------------------------------
+
+If an INITIALISATION assignment is x ≔ ∅ (empty set or empty
+function) and the variable is updated via index assignment in
+events (e.g. x(i) ≔ v), the variable is being used as a
+function or map.
+
+Declare it as a PAT array populated with a sentinel value,
+typically -1, to indicate that no entries have been assigned
+yet:
+
+    var <name>[<size>] = [-1(<size>)];
+
+The size of the array can be inferred from the maximum value
+of the variables used to index it. For example, if a guard
+constrains the index variable with i < k or a termination
+condition uses i = k+1, the array size can be set to k+1.
+
+Example:
+    Event-B:    buf ≔ ∅
+                (later used as buf(i) ≔ v, with i bounded by k)
+    PAT:        var buf[k+1] = [-1(k+1)];
+
+----------------------------------------------------------------
+Rule 3C — Non-deterministic Initialisation
+----------------------------------------------------------------
+
+If an INITIALISATION assignment uses the :∈ operator (e.g.
+x :∈ S), the variable is initialised to an arbitrary member
+of a set. PAT has no non-deterministic assignment operator,
+but this can be modelled using a combination of enum
+declarations and external choice.
+
+First, represent the set as an enum declaration:
+
+    enum {s1, s2, s3};
+
+Then, model the non-deterministic initialisation using an
+invisible event with external choice in a separate
+initialisation process for the variable:
+
+    Init_x() = tau{x = s1;} -> Skip
+            [] tau{x = s2;} -> Skip
+            [] tau{x = s3;} -> Skip;
+
+This ensures that all possible initial values are explored
+during model checking. See Rule 7 for how to incorporate
+initialisation processes into the system.
+
+Simplification:
+
+If the variable is always written to before it is ever read
+from in all events, the initial value has no effect on the
+system's behaviour. In this case, the enum and the Init
+process can be omitted, and the variable can simply be
+declared without an initial value:
+
+    var x;
+
+================================================================
+RULE 4 — Events: One-to-One Mapping
+================================================================
+
+Each non-INITIALISATION event in EVENTS maps to exactly one
+PAT event with guarded conditions. The event_name field maps
+directly to the PAT event label.
+
+The REFINES, ANY and WITH fields are ignored entirely.
+
+Example:
+    Event-B:    "event_name": "activate"
+    PAT:        activate { ... }
+
+================================================================
+RULE 5 — Events: Guards
+================================================================
+
+For each event, take every predicate in the WHERE clause,
+conjoin them with &&, and wrap in square brackets.
+
+If WHERE is empty, omit the guard brackets entirely.
+
+All WHERE predicates are translated uniformly regardless of
+their label (grd, thm, or otherwise).
+
+If any predicate contains a function application f(expr),
+convert it to array indexing f[expr] per Rule 8B.
+
+Example:
+    Event-B:    WHERE:
+                    grd1: active = FALSE
+                    grd2: count < limit
+    PAT:        [active == false && count < limit]
+
+================================================================
+RULE 6 — Events: Statement Block (Actions)
+================================================================
+
+Each assignment in the THEN field becomes a statement inside
+the event statement block, separated and terminated by
+semicolons.
+
+Statements are emitted in the order they appear in the THEN
+field.
+
+If any assignment contains a function application on the left
+or right side, convert it to array indexing per Rule 8B.
+
+Example:
+    Event-B:    THEN:
+                    act1: x := x + 1
+                    act2: active := TRUE
+    PAT:        activate { x = x + 1; active = true; }
+
+================================================================
+RULE 7 — System Process
+================================================================
+
+All translated events are to be collected into a single
+process called System() and joined by the external choice
+operator []. Each event also recursively transitions back
+to the System process.
+
+Template:
+
+    System() =
+        [guard1] event1 { actions1 } -> System()
+        []
+        [guard2] event2 { actions2 } -> System()
+        []
+        ...
+        [guardN] eventN { actionsN } -> System();
+
+If an event has no guard (empty WHERE clause), the transition
+is emitted without guard brackets:
+
+        eventN { actionsN } -> System()
+
+Non-deterministic initialisation processes:
+
+If any non-deterministic initialisation processes were created
+(see Rule 3C), define a FinalSystem process that sequences all
+initialisation processes before the main System process:
+
+    FinalSystem = Init_x(); Init_y(); ...; System();
+
+Where Init_x(), Init_y(), etc. are the initialisation processes
+for each non-deterministically initialised variable, and
+System() is the process containing all translated events.
+FinalSystem should be used as the top-level process for
+verification assertions.
+
+================================================================
+RULE 8 — Functions
+================================================================
+
+Event-B uses functions both as constants and as variables. PAT
+has no native function type. All functions must be converted to
+arrays. The domain becomes the array indices, and each element
+holds the result of evaluating the function at that index.
+
+Domain bounds:
+
+The pipeline should attempt to infer the domain bounds of each
+function from the available information gathered from the
+source Event-B file. Bounds may be inferred from:
+
+  - The function's type axiom (e.g. cost in 1..k -> N gives
+    an upper bound of k)
+  - Guard predicates that bound the index variable (e.g.
+    i < maxItems in a guard where f(i) is used)
+  - Constants used in termination conditions (e.g. idx = k+1
+    suggests the domain is 1..k)
+
+The above methods are not exhaustive. The pipeline may use
+other inference strategies as appropriate, and should report
+how the bounds were inferred.
+
+If bounds can be inferred, the translator should present them
+to the user for verification after generating the full model.
+
+If bounds cannot be inferred (e.g. the axiom types the
+function over N or Z without a finite bound), prompt the user
+to supply the domain range.
+
+----------------------------------------------------------------
+Rule 8A — Functions Defined in Contexts
+----------------------------------------------------------------
+
+If a CONSTANT in a CONTEXT has an axiom that types it as a
+function (indicated by the -> or -|-> operator in the
+predicate, e.g. fib in N -> N), it must be converted to a
+PAT array. The remaining axioms define the function's values,
+either through explicit assignments or recursive definitions.
+The pipeline evaluates these axioms over the inferred domain
+and populates the array.
+
+    #define <name>_size <bound>;
+    var <name>[<name>_size] = [v0, v1, v2, ..., vn];
+
+Where v0 = f(0), v1 = f(1), ..., vn = f(n) are the results
+of evaluating the function at each index in the domain. The
+size of the array is determined from the inferred domain
+bounds (see Domain bounds above).
+
+There are two possible evaluation patterns:
+
+1. Explicit value axioms — each input has a directly assigned
+   output (e.g. cost(1) = 10, cost(2) = 20, cost(3) = 15).
+   The translator reads off each value and populates the
+   array directly.
+
+2. Recursive axioms — a base case and a recursive step (e.g.
+   fib(0) = 0, fib(1) = 1,
+   fib(x+2) = fib(x+1) + fib(x)).
+   The translator evaluates the recursion from the base case
+   up to the domain bound and populates the array.
+
+If the axioms only partially constrain the function without
+fully defining it, flag it to the user and output the axioms
+as comments to assist manual conversion.
+
+----------------------------------------------------------------
+Rule 8B — Function Application
+----------------------------------------------------------------
+
+Wherever a function application f(expr) appears in an event,
+whether in a WHERE predicate (guard) or a THEN assignment
+(action), on the left-hand side or the right-hand side,
+convert parentheses to square brackets for PAT array indexing.
+
+    Event-B             PAT
+    ------------------------------------
+    x(expr) := v        x[expr] = v;       (LHS assignment)
+    x := g(expr)        x = g[expr];       (RHS read)
+    f(expr) = v         f[expr] == v        (guard predicate)
+
+----------------------------------------------------------------
+Rule 8C — Undefined Functions
+----------------------------------------------------------------
+
+If an identifier is used as a function in events (appears as
+f(expr) in guards or actions) but is not declared as a
+VARIABLE or CONSTANT in the provided input, it is a function
+from an unprovided context. The translator should infer the
+domain bounds from usage in the events and guards (see Domain
+bounds above).
+
+If no axioms define the function's values, the translator
+should auto-populate the array with distinct default values
+(e.g. using the index as the value: f[1] = 1, f[2] = 2, ...).
+Distinct values ensure the model checker can distinguish
+between different elements during verification. The user
+should be informed that default values were used.
+
+================================================================
+RULE 9 — Operators
+================================================================
+
+This rule describes the operator conversion from Event-B to
+PAT.
+
+    Event-B             PAT
+    ------------------------------------
+    x = v               x == v
+    x /= v              x != v
+    x > v               x > v
+    x < v               x < v
+    x >= v              x >= v
+    x <= v              x <= v
+    x = TRUE            x == true
+    x = FALSE           x == false
+    x := v              x = v
+    x := TRUE           x = true
+    x := FALSE          x = false
+    p /\ q              p && q
+    p \/ q              p || q
+    not p               !p
+    p => q              !p || q
+
+Unicode normalisation:
+
+Before applying operator mappings, normalise the following
+Unicode operators found in Event-B JSON:
+
+    Unicode             PAT equivalent
+    ------------------------------------
+    ≔  (U+2254)         = (assignment)
+    ≠  (U+2260)         !=
+    ∧  (U+2227)         &&
+    ∨  (U+2228)         ||
+    ¬  (U+00AC)         !
+    ⇒  (U+21D2)         rewrite as !p || q
+    −  (U+2212)         - (standard minus)
+    ℕ ℤ ℙ (type info)   discard
+
+================================================================
+END OF RULES
+================================================================

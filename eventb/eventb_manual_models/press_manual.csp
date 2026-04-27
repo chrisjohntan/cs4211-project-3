@@ -1,0 +1,173 @@
+enum{stopped, working}; // motor state
+
+enum{engaged, disengaged}; // clutch state
+
+enum{open, closed}; // door state
+
+
+var motor_actuator = stopped;
+var motor_sensor = stopped;
+var start_motor_button = false;
+var start_motor_impulse = false;
+var stop_motor_button = false;
+var stop_motor_impulse = false;
+var clutch_actuator = disengaged;
+var clutch_sensor = disengaged;
+var door_actuator = open;
+var door_sensor = open;
+var m = false;
+var start_clutch_button = false;
+var start_clutch_impulse = false;
+var stop_clutch_button = false;
+var stop_clutch_impulse = false;
+
+
+System() =
+    [motor_sensor == stopped && motor_actuator == working]
+    motor_start { motor_sensor = working; }
+    -> System()
+    []
+    [motor_sensor == working && motor_actuator == stopped]
+    motor_stop { motor_sensor = stopped; }
+    -> System()
+    []
+    [clutch_sensor == disengaged && clutch_actuator == engaged]
+    clutch_start { clutch_sensor = engaged; }
+    -> System()
+    []
+    [clutch_sensor == engaged && clutch_actuator == disengaged]
+    clutch_stop { clutch_sensor = disengaged; }
+    -> System()
+    []
+    [door_sensor == open && door_actuator == closed]
+    door_close { door_sensor = closed; }
+    -> System()
+    []
+    [door_sensor == closed && door_actuator == open]
+    door_open { door_sensor = open; }
+    -> System()
+    []
+    [start_motor_button == false]
+    push_start_motor_button { start_motor_button = true; }
+    -> System()
+    []
+    [start_motor_button == true]
+    release_start_motor_button { start_motor_button = false; }
+    -> System()
+    []
+    [stop_motor_button == false]
+    push_stop_motor_button { stop_motor_button = true; }
+    -> System()
+    []
+    [stop_motor_button == true]
+    release_stop_motor_button { stop_motor_button = false; }
+    -> System()
+    []
+    [start_clutch_button == false]
+    push_start_clutch_button { start_clutch_button = true; }
+    -> System()
+    []
+    [start_clutch_button == true]
+    release_start_clutch_button { start_clutch_button = false; }
+    -> System()
+    []
+    [stop_clutch_button == false]
+    push_stop_clutch_button { stop_clutch_button = true; }
+    -> System()
+    []
+    [stop_clutch_button == true]
+    release_stop_clutch_button { stop_clutch_button = false; }
+    -> System()
+    []
+    [motor_sensor == stopped && motor_actuator == stopped &&
+        start_motor_impulse == false && start_motor_button == true]
+    treat_start_motor { motor_actuator = working; start_motor_impulse = true; }
+    -> System()
+    []
+    [start_motor_impulse == false && start_motor_button == true &&
+        !(motor_sensor == stopped && motor_actuator == stopped)]
+    treat_start_motor_false { start_motor_impulse = true; }
+    -> System()
+    []
+    [motor_sensor == working && motor_actuator == working &&
+        stop_motor_impulse == false && stop_motor_button == true &&
+        clutch_sensor == disengaged && clutch_actuator == disengaged &&
+        door_sensor == open && door_actuator == open]
+    treat_stop_motor { motor_actuator = stopped; stop_motor_impulse = true; }
+    -> System()
+    []
+    [stop_motor_impulse == false && stop_motor_button == true &&
+        !(motor_sensor == working && motor_actuator == working &&
+        clutch_sensor == disengaged && clutch_actuator == disengaged &&
+        door_sensor == open && door_actuator == open)]
+    treat_stop_motor_false { stop_motor_impulse = true; }
+    -> System()
+    []
+    [start_motor_impulse == true && start_motor_button == false]
+    treat_release_start_motor_button { start_motor_impulse = false; }
+    -> System()
+    []
+    [stop_motor_impulse == true && stop_motor_button == false]
+    treat_release_stop_motor_button { stop_motor_impulse = false; }
+    -> System()
+    []
+    [clutch_actuator == disengaged && clutch_sensor == disengaged &&
+        motor_sensor == working && motor_actuator == working &&
+        door_sensor == closed && door_actuator == closed &&
+        m == true]
+    treat_start_clutch { clutch_actuator = engaged; m = false; }
+    -> System()
+    []
+    [clutch_actuator == engaged && clutch_sensor == engaged &&
+        stop_clutch_impulse == false && stop_clutch_button == true]
+    treat_stop_clutch { clutch_actuator = disengaged; stop_clutch_impulse = true; }
+    -> System()
+    []
+    [stop_clutch_impulse == false && stop_clutch_button == true &&
+        !(clutch_sensor == engaged && clutch_actuator == engaged)]
+    treat_stop_clutch_false { stop_clutch_impulse = true; }
+    -> System()
+    []
+    [door_actuator == open && door_sensor == open &&
+        motor_sensor == working && motor_actuator == working &&
+        start_clutch_impulse == false && start_clutch_button == true]
+    treat_close_door { door_actuator = closed; m = true; start_clutch_impulse = true; }
+    -> System()
+    []
+    [start_clutch_impulse == false && start_clutch_button == true &&
+        !(motor_sensor == working && motor_actuator == working &&
+        door_actuator == open && door_sensor == open)]
+    treat_close_door_false { start_clutch_impulse = true; }
+    -> System()
+    []
+    [door_actuator == closed && door_sensor == closed &&
+        clutch_sensor == disengaged && clutch_actuator == disengaged &&
+        m == false]
+    treat_open_door { door_actuator = open; }
+    -> System()
+    []
+    [start_clutch_impulse == true && start_clutch_button == false]
+    treat_release_start_clutch_button { start_clutch_impulse = false; }
+    -> System()
+    []
+    [stop_clutch_impulse == true && stop_clutch_button == false]
+    treat_release_stop_clutch_button { stop_clutch_impulse = false; }
+    -> System();
+
+
+
+// REQUIREMENTS
+
+#assert System deadlockfree; // expect valid
+
+#assert System() |= [](treat_stop_clutch -> (!treat_start_clutch U (door_open || []!treat_start_clutch)));
+
+#assert System() |= [](treat_stop_clutch -> (!treat_close_door U (door_open || []!treat_close_door)));
+
+
+#define clutchEngaged (clutch_sensor == engaged && clutch_actuator == engaged);
+#define motorWorking (motor_sensor == working && motor_actuator == working);
+#define doorClosed (door_sensor == closed && door_actuator == closed);
+
+#assert System() |= [](!clutchEngaged || motorWorking);
+#assert System() |= [](!clutchEngaged || doorClosed);

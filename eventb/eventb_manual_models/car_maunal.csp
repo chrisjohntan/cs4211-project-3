@@ -1,0 +1,235 @@
+// TO BE SET: maximum number of cars on bridge and island
+#define d 6;
+
+
+enum {green, red};
+enum {on, off};
+
+// INITIALISATION
+var a = 0;
+var b = 0;
+var c = 0;
+
+var ml_tl = red;
+var il_tl = red;
+
+var ml_pass = 1;
+var il_pass = 1;
+
+var ml_out_10 = false;
+var il_out_10 = false;
+var ml_in_10 = false;
+var il_in_10 = false;
+
+var A = 0;
+var B = 0;
+var C = 0;
+
+var ML_IN_SR = off;
+var ML_OUT_SR = off;
+var IL_IN_SR = off;
+var IL_OUT_SR = off;
+
+// System
+
+// syntax:
+// P() = [guard]event_name{actions}->P() [] [guard]event_name{actions}...
+
+System() =
+
+	[ml_out_10 == true && a + b + 1 < d]
+    ML_out1 { a = a + 1; ml_pass = 1; ml_out_10 = false; }
+    -> System()
+    []
+    [ml_out_10 == true && a + b + 1 == d]
+    ML_out2 { a = a + 1; ml_tl = red; ml_pass = 1; ml_out_10 = false; }
+    -> System()
+    [] 
+    [il_out_10 == true && b > 1]
+    IL_out1 { b = b - 1; c = c + 1; il_pass = 1; il_out_10 = false; }
+    -> System()
+    []
+    [il_out_10 == true && b == 1]
+    IL_out2 { b = b - 1; il_tl = red; c = c + 1; il_pass = 1; il_out_10 = false; }
+    -> System()
+    []
+    [il_in_10 == true && a > 0]
+    IL_in { a = a - 1; b = b + 1; il_in_10 = false; }
+    -> System()
+    []
+    [ml_in_10 == true && c > 0]
+    ML_in { c = c - 1; ml_in_10 = false; }
+    -> System()
+    []
+    [ml_tl == red && a + b < d && c == 0 && il_pass == 1 && il_out_10 == false]
+    ML_tl_green { ml_tl = green; il_tl = red; ml_pass = 0; }
+    -> System()
+    []
+    [il_tl == red && b > 0 && a == 0 && ml_pass == 1 && ml_out_10 == false]
+    IL_tl_green { il_tl = green; ml_tl = red; il_pass = 0; }
+    -> System()
+    []
+    [ML_OUT_SR == off && ml_out_10 == false]
+    ML_OUT_ARR { ML_OUT_SR = on; }
+    -> System()
+    []
+    [ML_OUT_SR == on && ml_tl == green]
+    ML_OUT_DEP { ML_OUT_SR = off; ml_out_10 = true; A = A + 1; }
+    -> System()
+    []
+    [IL_OUT_SR == off && il_out_10 == false && B > 0]
+    IL_OUT_ARR { IL_OUT_SR = on; }
+    -> System()
+    []
+    [IL_OUT_SR == on && il_tl == green]
+    IL_OUT_DEP { IL_OUT_SR = off; il_out_10 = true; B = B - 1; C = C + 1; }
+    -> System()
+    []
+    [ML_IN_SR == off && ml_in_10 == false && C > 0]
+    ML_IN_ARR { ML_IN_SR = on; }
+    -> System()
+    []
+    [ML_IN_SR == on]
+    ML_IN_DEP { ML_IN_SR = off; ml_in_10 = true; C = C - 1; }
+    -> System()
+    []
+    [IL_IN_SR == off && il_in_10 == false && A > 0]
+    IL_IN_ARR { IL_IN_SR = on; }
+    -> System()
+    []
+    [IL_IN_SR == on]
+    IL_IN_DEP { IL_IN_SR = off; il_in_10 = true; A = A - 1; B = B + 1; }
+    -> System();
+    
+
+
+// REQUIREMENTS 
+// The number of cars on the bridge and the island is limited by some constant d
+#define req1 A + B + C <= d;
+#assert System |= [] req1;
+
+// The bridge is one way or the other, not both at the same time
+#define req2 A == 0 || C == 0;
+#assert System |= [] req2;
+
+// Cars are not supposed to pass on a red traffic light, only on a green one
+#define req3 !(ml_out_10 == true) || (ml_tl == green);
+#define req4 !(il_out_10 == true) || (il_tl == green);
+#assert System() |= [] req3;
+#assert System() |= [] req4;
+
+// Once started, the system should work forever and never reach a state in which no event can occur.
+#assert System deadlockfree;
+
+
+// INVARIANTS AS ADDITIONAL ASSERTIONS
+// inv1: IL_IN_SR = on => A > 0
+#define inv1 !(IL_IN_SR == on) || (A > 0);
+
+// inv2: IL_OUT_SR = on => B > 0
+#define inv2 !(IL_OUT_SR == on) || (B > 0);
+
+// inv3: ML_IN_SR = on => C > 0
+#define inv3 !(ML_IN_SR == on) || (C > 0);
+
+// inv4: ml_out_10 = true => ml_tl = green
+#define inv4 !(ml_out_10 == true) || (ml_tl == green);
+
+// inv5: il_out_10 = true => il_tl = green
+#define inv5 !(il_out_10 == true) || (il_tl == green);
+
+// inv6: IL_IN_SR = on => il_in_10 = false
+#define inv6 !(IL_IN_SR == on) || (il_in_10 == false);
+
+// inv7: IL_OUT_SR = on => il_out_10 = false
+#define inv7 !(IL_OUT_SR == on) || (il_out_10 == false);
+
+// inv8: ML_IN_SR = on => ml_in_10 = false
+#define inv8 !(ML_IN_SR == on) || (ml_in_10 == false);
+
+// inv9: ML_OUT_SR = on => ml_out_10 = false
+#define inv9 !(ML_OUT_SR == on) || (ml_out_10 == false);
+
+
+// inv10: il_in_10 = TRUE  /\ ml_out_10 = TRUE  => A = a
+#define inv10 !(il_in_10 == true && ml_out_10 == true) || (A == a);
+
+// inv11: il_in_10 = FALSE /\ ml_out_10 = TRUE  => A = a+1
+#define inv11 !(il_in_10 == false && ml_out_10 == true) || (A == a + 1);
+
+// inv12: il_in_10 = TRUE  /\ ml_out_10 = FALSE => A = a-1
+#define inv12 !(il_in_10 == true && ml_out_10 == false) || (A == a - 1);
+
+// inv13: il_in_10 = FALSE /\ ml_out_10 = FALSE => A = a
+#define inv13 !(il_in_10 == false && ml_out_10 == false) || (A == a);
+
+// inv14: il_in_10 = TRUE  /\ il_out_10 = TRUE  => B = b
+#define inv14 !(il_in_10 == true && il_out_10 == true) || (B == b);
+
+// inv15: il_in_10 = TRUE  /\ il_out_10 = FALSE => B = b+1
+#define inv15 !(il_in_10 == true && il_out_10 == false) || (B == b + 1);
+
+// inv16: il_in_10 = FALSE /\ il_out_10 = TRUE  => B = b-1
+#define inv16 !(il_in_10 == false && il_out_10 == true) || (B == b - 1);
+
+// inv17: il_in_10 = FALSE /\ il_out_10 = FALSE => B = b
+#define inv17 !(il_in_10 == false && il_out_10 == false) || (B == b);
+
+// inv18: il_out_10 = TRUE  /\ ml_in_10 = TRUE  => C = c
+#define inv18 !(il_out_10 == true && ml_in_10 == true) || (C == c);
+
+// inv19: il_out_10 = TRUE  /\ ml_in_10 = FALSE => C = c+1
+#define inv19 !(il_out_10 == true && ml_in_10 == false) || (C == c + 1);
+
+// inv20: il_out_10 = FALSE /\ ml_in_10 = TRUE  => C = c-1
+#define inv20 !(il_out_10 == false && ml_in_10 == true) || (C == c - 1);
+
+// inv21: il_out_10 = FALSE /\ ml_in_10 = FALSE => C = c
+#define inv21 !(il_out_10 == false && ml_in_10 == false) || (C == c);
+
+// inv22: A = 0 OR C = 0 (no head-on collision)
+#define inv22 (A == 0 || C == 0);
+
+// inv23: A + B + C <= d (capacity never exceeded)
+#define inv23 (A + B + C <= d);
+
+// inv24: A >= 0
+#define inv24 (A >= 0);
+
+// inv25: B >= 0
+#define inv25 (B >= 0);
+
+// inv26: C >= 0
+#define inv26 (C >= 0);
+
+
+
+#assert System() |= [] inv1;
+#assert System() |= [] inv2;
+#assert System() |= [] inv3;
+#assert System() |= [] inv4;
+#assert System() |= [] inv5;
+#assert System() |= [] inv6;
+#assert System() |= [] inv7;
+#assert System() |= [] inv8;
+#assert System() |= [] inv9;
+#assert System() |= [] inv10;
+#assert System() |= [] inv11;
+#assert System() |= [] inv12;
+#assert System() |= [] inv13;
+#assert System() |= [] inv14;
+#assert System() |= [] inv15;
+#assert System() |= [] inv16;
+#assert System() |= [] inv17;
+#assert System() |= [] inv18;
+#assert System() |= [] inv19;
+#assert System() |= [] inv20;
+#assert System() |= [] inv21;
+#assert System() |= [] inv22;
+#assert System() |= [] inv23;
+#assert System() |= [] inv24;
+#assert System() |= [] inv25;
+#assert System() |= [] inv26;
+
+
+

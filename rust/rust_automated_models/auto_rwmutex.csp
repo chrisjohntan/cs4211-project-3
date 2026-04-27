@@ -1,0 +1,277 @@
+// ============================================================
+// PAT CSP# model for Rust RwMutex
+// Finite abstraction: 2 threads, max 2 readers
+// ============================================================
+
+#define N 2;
+#define MAX_READERS 2;
+#define NO_OWNER 2;
+
+#define FALSE 0;
+#define TRUE 1;
+
+#define REQ_NONE 0;
+#define REQ_READ 1;
+#define REQ_WRITE 2;
+#define REQ_UPREAD 3;
+
+// -------------------- Shared state --------------------
+// Bitfield decomposition of Rust lock:
+// WRITER            -> has_writer
+// UPGRADEABLE       -> has_upgradeable
+// BEING_UPGRADED    -> being_upgraded
+// reader count      -> readers
+
+var readers = 0;
+var has_writer = 0;
+var has_upgradeable = 0;
+var being_upgraded = 0;
+
+// Explicit ownership
+var write_owner = 2;
+var up_owner = 2;
+
+// WaitQueue abstraction
+var waiting[N] = [0,0];
+var permit[N] = [0,0];
+var request[N] = [0,0];
+
+// Critical-section abstraction
+var in_read_cs[N] = [0,0];
+var in_write_cs[N] = [0,0];
+var in_upread_cs[N] = [0,0];
+
+// -------------------- Thread API choices --------------------
+
+Thread(i) =
+      TryRead(i)
+   [] ReadReq(i)
+   [] TryWrite(i)
+   [] WriteReq(i)
+   [] TryUpread(i)
+   [] UpreadReq(i);
+
+// -------------------- try_read / read --------------------
+
+TryRead(i) =
+    [has_writer == FALSE && being_upgraded == FALSE && readers < MAX_READERS]
+        try_read_ok.i { readers = readers + 1; in_read_cs[i] = 1; } -> ReadHold(i)
+    []
+    [has_writer == TRUE || being_upgraded == TRUE || readers == MAX_READERS]
+        try_read_fail.i -> Thread(i);
+
+ReadReq(i) =
+    [has_writer == FALSE && being_upgraded == FALSE && readers < MAX_READERS]
+        read_ok.i { readers = readers + 1; in_read_cs[i] = 1; } -> ReadHold(i)
+    []
+    [has_writer == TRUE || being_upgraded == TRUE || readers == MAX_READERS]
+        read_block.i { waiting[i] = 1; request[i] = REQ_READ; } -> Wait(i);
+
+ReadHold(i) =
+    read_cs.i -> ReadRelease(i);
+
+ReadRelease(i) =
+    [readers > 1]
+        read_unlock_more.i { readers = readers - 1; in_read_cs[i] = 0; } -> Thread(i)
+    []
+    [readers == 1 && has_upgradeable == 0 && waiting[0] == 1]
+        read_unlock_wake0.i {
+            readers = 0;
+            in_read_cs[i] = 0;
+            permit[0] = 1;
+            waiting[0] = 0;
+        } -> Thread(i)
+    []
+    [readers == 1 && has_upgradeable == 0 && waiting[1] == 1]
+        read_unlock_wake1.i {
+            readers = 0;
+            in_read_cs[i] = 0;
+            permit[1] = 1;
+            waiting[1] = 0;
+        } -> Thread(i)
+    []
+    [readers == 1 && has_upgradeable == 0 && waiting[0] == 0 && waiting[1] == 0]
+        read_unlock_last.i {
+            readers = 0;
+            in_read_cs[i] = 0;
+        } -> Thread(i)
+    []
+    [readers == 1 && has_upgradeable == 1]
+        read_unlock_no_wake.i {
+            readers = 0;
+            in_read_cs[i] = 0;
+        } -> Thread(i);
+
+// -------------------- try_write / write --------------------
+
+TryWrite(i) =
+    [has_writer == FALSE && has_upgradeable == FALSE && readers == 0]
+        try_write_ok.i {
+            has_writer = 1;
+            write_owner = i;
+            in_write_cs[i] = 1;
+        } -> WriteHold(i)
+    []
+    [has_writer == TRUE || has_upgradeable == TRUE || readers > 0]
+        try_write_fail.i -> Thread(i);
+
+WriteReq(i) =
+    [has_writer == FALSE && has_upgradeable == FALSE && readers == 0]
+        write_ok.i {
+            has_writer = 1;
+            write_owner = i;
+            in_write_cs[i] = 1;
+        } -> WriteHold(i)
+    []
+    [has_writer == TRUE || has_upgradeable == TRUE || readers > 0]
+        write_block.i { waiting[i] = 1; request[i] = REQ_WRITE; } -> Wait(i);
+
+WriteHold(i) =
+      write_cs.i -> WriteRelease(i)
+   []
+      downgrade.i {
+          has_writer = 0;
+          write_owner = NO_OWNER;
+          in_write_cs[i] = 0;
+
+          has_upgradeable = 1;
+          up_owner = i;
+          in_upread_cs[i] = 1;
+
+          permit[0] = waiting[0];
+          permit[1] = waiting[1];
+          waiting[0] = 0;
+          waiting[1] = 0;
+      } -> UpreadHold(i);
+
+WriteRelease(i) =
+    write_unlock.i {
+        has_writer = 0;
+        write_owner = NO_OWNER;
+        in_write_cs[i] = 0;
+
+        permit[0] = waiting[0];
+        permit[1] = waiting[1];
+        waiting[0] = 0;
+        waiting[1] = 0;
+    } -> Thread(i);
+
+// -------------------- try_upread / upread --------------------
+
+TryUpread(i) =
+    [has_writer == FALSE && has_upgradeable == FALSE]
+        try_upread_ok.i {
+            has_upgradeable = 1;
+            up_owner = i;
+            in_upread_cs[i] = 1;
+        } -> UpreadHold(i)
+    []
+    [has_writer == TRUE || has_upgradeable == TRUE]
+        try_upread_fail.i -> Thread(i);
+
+UpreadReq(i) =
+    [has_writer == FALSE && has_upgradeable == FALSE]
+        upread_ok.i {
+            has_upgradeable = 1;
+            up_owner = i;
+            in_upread_cs[i] = 1;
+        } -> UpreadHold(i)
+    []
+    [has_writer == TRUE || has_upgradeable == TRUE]
+        upread_block.i { waiting[i] = 1; request[i] = REQ_UPREAD; } -> Wait(i);
+
+UpreadHold(i) =
+      upread_cs.i -> UpreadRelease(i)
+   []
+      begin_upgrade.i { being_upgraded = 1; } -> UpgradeWait(i);
+
+UpgradeWait(i) =
+    [readers == 0 && has_writer == 0 && has_upgradeable == 1 && up_owner == i]
+        upgrade_ok.i {
+            being_upgraded = 0;
+            has_upgradeable = 0;
+            up_owner = NO_OWNER;
+            in_upread_cs[i] = 0;
+
+            has_writer = 1;
+            write_owner = i;
+            in_write_cs[i] = 1;
+        } -> WriteHold(i)
+    []
+    [!(readers == 0 && has_writer == 0 && has_upgradeable == 1 && up_owner == i)]
+        upgrade_spin.i -> UpgradeWait(i);
+
+UpreadRelease(i) =
+    [readers == 0]
+        upread_unlock_wake_all.i {
+            has_upgradeable = 0;
+            up_owner = NO_OWNER;
+            in_upread_cs[i] = 0;
+
+            permit[0] = waiting[0];
+            permit[1] = waiting[1];
+            waiting[0] = 0;
+            waiting[1] = 0;
+        } -> Thread(i)
+    []
+    [readers > 0]
+        upread_unlock_no_wake.i {
+            has_upgradeable = 0;
+            up_owner = NO_OWNER;
+            in_upread_cs[i] = 0;
+        } -> Thread(i);
+
+// -------------------- WaitQueue abstraction --------------------
+
+Wait(i) =
+    [permit[i] == 1 && request[i] == REQ_READ]
+        wake_read.i {
+            permit[i] = 0;
+            request[i] = REQ_NONE;
+        } -> ReadReq(i)
+    []
+    [permit[i] == 1 && request[i] == REQ_WRITE]
+        wake_write.i {
+            permit[i] = 0;
+            request[i] = REQ_NONE;
+        } -> WriteReq(i)
+    []
+    [permit[i] == 1 && request[i] == REQ_UPREAD]
+        wake_upread.i {
+            permit[i] = 0;
+            request[i] = REQ_NONE;
+        } -> UpreadReq(i)
+    []
+    [permit[i] == 0]
+        sleep.i -> Wait(i);
+
+// -------------------- System --------------------
+
+System() = ||| i:{0..N-1} @ Thread(i);
+
+// -------------------- Assertions --------------------
+
+#define BadWriterReader (has_writer == 1 && readers > 0);
+#define BadWriterUpreader (has_writer == 1 && has_upgradeable == 1);
+#define BadTwoWriters (in_write_cs[0] == 1 && in_write_cs[1] == 1);
+#define BadTwoUpreaders (in_upread_cs[0] == 1 && in_upread_cs[1] == 1);
+#define BadWriteOwner (has_writer == 0 && write_owner != NO_OWNER);
+#define BadUpOwner (has_upgradeable == 0 && up_owner != NO_OWNER);
+#define BadUpgradeFlag (being_upgraded == 1 && has_upgradeable == 0);
+
+#define T0CanRead (in_read_cs[0] == 1);
+#define T0CanWrite (in_write_cs[0] == 1);
+#define T0CanUpread (in_upread_cs[0] == 1);
+
+#assert System() deadlockfree;
+#assert System() |= [](!BadWriterReader);
+#assert System() |= [](!BadWriterUpreader);
+#assert System() |= [](!BadTwoWriters);
+#assert System() |= [](!BadTwoUpreaders);
+#assert System() |= [](!BadWriteOwner);
+#assert System() |= [](!BadUpOwner);
+#assert System() |= [](!BadUpgradeFlag);
+
+#assert System() reaches T0CanRead;
+#assert System() reaches T0CanWrite;
+#assert System() reaches T0CanUpread;

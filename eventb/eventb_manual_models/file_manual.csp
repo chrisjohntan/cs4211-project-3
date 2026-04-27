@@ -1,0 +1,70 @@
+#define n 4; // number of segments in the file
+
+#define length 5;
+var parity[length + 1] = [0, 1, 0, 1, 0, 1]; // represents the parity function
+
+enum{d1, d2, d3, d4}; // represents the set D
+
+var h[n+1] = [-1(n+1)]; // receiver file
+var f[n+1] = [-1, d1, d2, d3, d4]; // sender file
+
+var r = 1; // receiver index
+var s = 1; // sender index
+
+var p = 1; // parity bits
+var q = 1; //
+
+var b = false; // completion flag
+
+var d; 
+d_Init() = { d = d1; } -> Skip // represents d :? D
+        [] { d = d2; } -> Skip 
+        [] { d = d3; } -> Skip 
+        [] { d = d4; } -> Skip;
+
+System() = 
+  [r == n + 1 && b == false] 
+  final {b = true} 
+  -> System()
+  []
+  [p != q] 
+  receive{h[r] = d; r = r + 1; q = 1 - q;} 
+  -> System()
+  []
+  [p == q && s != n + 1 && p == parity[s] && q == parity[r]] 
+  send{d = f[s]; s = s + 1; p = 1 - p} 
+  -> System();
+
+FinalSystem() = d_Init(); System();
+
+
+
+// INVARIANTS AND REQUIREMENTS
+#define inv1 p == parity[s];
+#assert System() |=[] inv1;
+
+#define inv2 q == parity[r];
+#assert System() |=[] inv2;
+
+
+#assert System() deadlockfree;
+#assert System() |= <> final;
+
+
+// have to manually check based on n, in this case n=4
+// whole file copied
+#define file_copied (b == true &&
+    h[1] == f[1] &&
+    h[2] == f[2] &&
+    h[3] == f[3] &&
+    h[4] == f[4] );
+#assert System() |=<> file_copied;
+
+// sent piece by piece
+#define piecewise 
+    ((!(r > 1) || h[1] == f[1]) && 
+     (!(r > 2) || h[2] == f[2]) && 
+     (!(r > 3) || h[3] == f[3]) && 
+     (!(r > 4) || h[4] == f[4]) );
+#assert System |= [] piecewise;
+

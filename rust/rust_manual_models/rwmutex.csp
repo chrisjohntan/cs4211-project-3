@@ -1,0 +1,210 @@
+﻿//==================================================
+// Model 4: RwMutex (Rust) -> PAT CSP#
+// Draft manual model
+//==================================================
+
+#define N 3;                // threads 0..2
+#define NONE 3;             // sentinel for "no owner"
+#define MAXR 3;             // finite bound on reader count
+
+//----------------------
+// Shared lock state
+//----------------------
+var reader_count : {0..MAXR} = 0;   // number of active ordinary readers
+var writer : {0..1} = 0;            // 1 iff a writer holds the lock
+var upreader : {0..1} = 0;          // 1 iff an upgradeable reader exists
+var upgrading : {0..1} = 0;         // 1 iff upgrade has started, so new readers blocked
+
+// Optional owner tracking for writer / upreader
+var write_owner : {0..N} = NONE;
+var upreader_owner : {0..N} = NONE;
+
+// Thread-local mode:
+// 0 = idle
+// 1 = read guard held
+// 2 = write guard held
+// 3 = upgradeable-read guard held
+var mode[N] : {0..3};
+
+// For assertions / debugging
+var cs_readers : {0..MAXR} = 0;
+var cs_writers : {0..1} = 0;
+
+//----------------------
+// Macros / invariants
+//----------------------
+#define R1 (cs_readers == 2);
+#define R2 (cs_writers == 1);
+#define R3 (mode[2] == 2);
+#define BAD1 (writer == 1 && cs_readers > 0);
+#define BAD2 (cs_writers > 1);
+
+#define MUTEX !(writer == 1 && cs_readers > 0);
+#define SINGLE_WRITER (cs_writers <= 1);
+#define UPREADER_UNIQUE (upreader == 0 || upreader == 1);
+#define WRITE_STATE_OK (writer == 0 || reader_count == 0);
+#define OWNER_OK ((writer == 0 || write_owner != NONE) && (writer == 1 || write_owner == NONE));
+#define UPREADER_OWNER_OK ((upreader == 0 || upreader_owner != NONE) && (upreader == 1 || upreader_owner == NONE));
+#define CONSISTENT (MUTEX && SINGLE_WRITER && UPREADER_UNIQUE && WRITE_STATE_OK && OWNER_OK && UPREADER_OWNER_OK);
+
+//----------------------
+// Reader thread
+//----------------------
+Reader(i) =
+    idle_read.i ->
+    TryRead(i);
+
+TryRead(i) =
+    // try_read succeeds iff no writer and no upgrading in progress
+    [mode[i] == 0 && writer == 0 && upgrading == 0 && reader_count < MAXR]
+    acquire_read.i {
+        reader_count = reader_count + 1;
+        mode[i] = 1;
+        cs_readers = cs_readers + 1;
+    } -> ReadCS(i)
+
+    []
+    // otherwise it would block / wait in the queue
+    [mode[i] == 0 && !(writer == 0 && upgrading == 0 && reader_count < MAXR)]
+    wait_read.i -> TryRead(i);
+
+ReadCS(i) =
+    read_crit.i -> ReleaseRead(i);
+
+ReleaseRead(i) =
+    [mode[i] == 1]
+    release_read.i {
+        reader_count = reader_count - 1;
+        mode[i] = 0;
+        cs_readers = cs_readers - 1;
+    } -> Reader(i);
+
+//----------------------
+// Writer thread
+//----------------------
+Writer(i) =
+    idle_write.i ->
+    TryWrite(i);
+
+TryWrite(i) =
+    // try_write succeeds iff fully free state
+    [mode[i] == 0 && writer == 0 && upreader == 0 && reader_count == 0]
+    acquire_write.i {
+        writer = 1;
+        write_owner = i;
+        mode[i] = 2;
+        cs_writers = 1;
+    } -> WriteCS(i)
+
+    []
+    [mode[i] == 0 && !(writer == 0 && upreader == 0 && reader_count == 0)]
+    wait_write.i -> TryWrite(i);
+
+WriteCS(i) =
+    write_crit.i -> WriterChoice(i);
+
+WriterChoice(i) =
+    // either release normally
+    release_write.i {
+        writer = 0;
+        write_owner = NONE;
+        mode[i] = 0;
+        cs_writers = 0;
+    } -> Writer(i)
+
+    []
+    // or downgrade into upgradeable reader
+    downgrade.i {
+        writer = 0;
+        upreader = 1;
+        upgrading = 0;
+        write_owner = NONE;
+        upreader_owner = i;
+        mode[i] = 3;
+        cs_writers = 0;
+    } -> UpreadCS(i);
+
+//----------------------
+// Upgradeable reader thread
+//----------------------
+Upreader(i) =
+    idle_upread.i ->
+    TryUpread(i);
+
+TryUpread(i) =
+    // try_upread succeeds iff no writer and no existing upreader
+    [mode[i] == 0 && writer == 0 && upreader == 0]
+    acquire_upread.i {
+        upreader = 1;
+        upreader_owner = i;
+        mode[i] = 3;
+    } -> UpreadCS(i)
+
+    []
+    [mode[i] == 0 && !(writer == 0 && upreader == 0)]
+    wait_upread.i -> TryUpread(i);
+
+UpreadCS(i) =
+    upread_crit.i -> UpreaderChoice(i);
+
+UpreaderChoice(i) =
+    // release upread
+    release_upread.i {
+        upreader = 0;
+        upgrading = 0;
+        upreader_owner = NONE;
+        mode[i] = 0;
+    } -> Upreader(i)
+
+    []
+    // start upgrade: block future readers, then wait for ordinary readers to drain
+    start_upgrade.i {
+        upgrading = 1;
+    } -> UpgradeLoop(i);
+
+UpgradeLoop(i) =
+    // successful upgrade only when no ordinary readers remain
+    [mode[i] == 3 && upreader == 1 && upreader_owner == i && reader_count == 0 && writer == 0]
+    upgrade_success.i {
+        writer = 1;
+        write_owner = i;
+        mode[i] = 2;
+        cs_writers = 1;
+
+        // keep upreader = 1 during transition, then dropping old upread effect:
+        upreader = 0;
+        upgrading = 0;
+        upreader_owner = NONE;
+    } -> WriteCS(i)
+
+    []
+    // otherwise spin-wait / retry
+    [mode[i] == 3 && !(reader_count == 0 && writer == 0)]
+    upgrade_spin.i -> UpgradeLoop(i);
+
+//----------------------
+// Whole system
+// Choose one reader thread, one writer thread,
+// one upgradeable-reader thread for a minimal model
+//----------------------
+System() = Reader(0) ||| Writer(1) ||| Upreader(2);
+
+//==================================================
+// Assertions
+//==================================================
+
+// Safety
+#assert System() deadlockfree;
+#assert System() |= [] CONSISTENT;
+#assert System() |= [] MUTEX;
+#assert System() |= [] SINGLE_WRITER;
+#assert System() |= [] WRITE_STATE_OK;
+
+// Reachability sanity checks
+#assert System() reaches R1;	// shared reading is possible
+#assert System() reaches R2;	// writer can enter
+#assert System() reaches R3;	// upreader can eventually upgrade to writer
+
+// Bad states should be unreachable
+#assert System() reaches BAD1;	// should be INVALID
+#assert System() reaches BAD2;	// should be INVALID

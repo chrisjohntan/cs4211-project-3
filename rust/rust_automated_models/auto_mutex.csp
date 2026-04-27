@@ -1,0 +1,159 @@
+﻿// =============================================================================
+// PAT CSP# Model: Mutex with WaitQueue
+// Source: mutex.rs (Asterinas)
+// =============================================================================
+
+// ---- Configuration ----
+#define N 2;           // Number of threads
+//#define NO_OWNER N;    // Sentinel: no thread owns the lock
+#define NO_OWNER 2;    // Sentinel: no thread owns the lock
+
+// ---- Rule 1: Atomic Variables -> Shared PAT Variables ----
+// AtomicBool lock -> var lock : {0..1}
+var lock = 0;          // 0 = unlocked (false), 1 = locked (true)
+
+// ---- Rule 2: Implicit Ownership -> Explicit Owner Variable ----
+// MutexGuard ownership is implicit in Rust; made explicit here
+var owner = NO_OWNER;
+
+// ---- Rule 7: WaitQueue Abstraction ----
+// waiting[i] = 1 means thread i is blocked in the WaitQueue
+// permit[i]  = 1 means thread i has been woken and may retry
+var waiting[N] = [0, 0];
+var permit[N]  = [0, 0];
+
+// ---- Rule 3: State Flags ----
+#define UNLOCKED 0;
+#define LOCKED   1;
+
+// ---- Critical section tracking (for verification) ----
+var in_cs[N] = [0, 0];
+
+// =============================================================================
+// try_lock: Non-blocking acquisition (Rule 5 & Rule 6)
+// =============================================================================
+// Models: pub fn try_lock(&self) -> Option<MutexGuard<T>>
+//   which calls acquire_lock() -> compare_exchange(false, true)
+//
+// Success branch: CAS succeeds, lock acquired
+// Failure branch: CAS fails, returns None immediately
+
+TryLock(i) =
+    // Rule 5: CAS success — atomic guard-action block
+    [lock == UNLOCKED] acquire.i {
+        lock = LOCKED;
+        owner = i;
+    } -> enter.i { in_cs[i] = 1; } -> Skip
+    []
+    // Rule 5: CAS failure — lock already held
+    [lock == LOCKED] tryfail.i -> Skip;
+
+// =============================================================================
+// unlock: Release and wake (Rule 5 & Rule 7)
+// =============================================================================
+// Models: fn unlock(&self) {
+//     self.release_lock();        // lock.store(false, Release)
+//     self.queue.wake_one();      // wake one waiting thread
+// }
+
+Unlock(i) =
+    [owner == i] exit.i { in_cs[i] = 0; } ->
+    release.i {
+        lock = UNLOCKED;
+        owner = NO_OWNER;
+    } ->
+    // Rule 7: wake_one() — grant permit to one waiting thread
+    // Non-deterministically pick a waiting thread to wake
+    (
+        [] j : {0..N-1} @ (
+            [waiting[j] == 1] wake.i.j { permit[j] = 1; } -> Skip
+        )
+        []
+        // No one is waiting — nothing to wake
+        [waiting[0] == 0 && waiting[1] == 0] wake_none.i -> Skip
+    );
+
+// =============================================================================
+// Blocking lock: lock() via WaitQueue (Rule 6 & Rule 7)
+// =============================================================================
+// Models: pub fn lock(&self) -> MutexGuard<T> {
+//     self.queue.wait_until(|| self.try_lock())
+// }
+//
+// Semantics: try to acquire; if it fails, enqueue in the WaitQueue,
+// then spin on permit until woken, then retry.
+
+Lock(i) =
+    // First attempt: try CAS directly
+    [lock == UNLOCKED] acquire.i {
+        lock = LOCKED;
+        owner = i;
+    } -> enter.i { in_cs[i] = 1; } -> Skip
+    []
+    // CAS failed: enter WaitQueue and block
+    [lock == LOCKED] block.i { waiting[i] = 1; } -> WaitForWake(i);
+
+WaitForWake(i) =
+    // Spin until permit is granted by a wake_one call
+    [permit[i] == 1] woken.i {
+        permit[i] = 0;
+        waiting[i] = 0;
+    } -> RetryLock(i)
+    []
+    // Still waiting — keep spinning
+    [permit[i] == 0] spinning.i -> WaitForWake(i);
+
+RetryLock(i) =
+    // Retry CAS after being woken
+    [lock == UNLOCKED] acquire.i {
+        lock = LOCKED;
+        owner = i;
+    } -> enter.i { in_cs[i] = 1; } -> Skip
+    []
+    // Woken but another thread grabbed the lock first — re-enqueue
+    [lock == LOCKED] block.i { waiting[i] = 1; } -> WaitForWake(i);
+
+// =============================================================================
+// Thread processes
+// =============================================================================
+
+// Thread using blocking lock (the primary API)
+ThreadBlocking(i) = Lock(i) ; Unlock(i) ; ThreadBlocking(i);
+
+// Thread using try_lock (non-blocking API, retries on failure)
+ThreadTryLock(i) = TryLock(i) ;
+    (
+        // If we acquired the lock (in_cs[i] == 1), use and release it
+        [in_cs[i] == 1] Unlock(i) ; ThreadTryLock(i)
+        []
+        // If try_lock failed (in_cs[i] == 0), retry
+        [in_cs[i] == 0] ThreadTryLock(i)
+    );
+
+// =============================================================================
+// System composition (Rule 6.3: interleaving)
+// =============================================================================
+
+// System with blocking lock threads
+SystemBlocking() = ||| i : {0..N-1} @ ThreadBlocking(i);
+
+// System with try_lock threads
+SystemTryLock() = ||| i : {0..N-1} @ ThreadTryLock(i);
+
+// Mixed system: thread 0 uses blocking lock, thread 1 uses try_lock
+SystemMixed() = ThreadBlocking(0) ||| ThreadTryLock(1);
+
+// =============================================================================
+// Assertions (provided as templates for manual verification)
+// =============================================================================
+
+// ---- Deadlock-freeness ----
+#assert SystemBlocking() deadlockfree;
+#assert SystemTryLock()  deadlockfree;
+#assert SystemMixed()    deadlockfree;
+
+// ---- Mutual exclusion ----
+#define mutex_violated (in_cs[0] == 1 && in_cs[1] == 1);
+#assert SystemBlocking() |= [](!mutex_violated);
+#assert SystemTryLock()  |= [](!mutex_violated);
+#assert SystemMixed()    |= [](!mutex_violated);
